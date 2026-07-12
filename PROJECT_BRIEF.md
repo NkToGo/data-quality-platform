@@ -1,4 +1,4 @@
-# Data Quality Platform — Project Brief
+# Data Quality Platform - Project Brief
 
 ## 1. Purpose
 
@@ -256,7 +256,7 @@ The MVP is complete when all of the following are true:
 
 ## 11. Development milestones
 
-### Milestone 1 — Foundation
+### Milestone 1 - Foundation
 
 - repository structure
 - Spring Boot application
@@ -265,14 +265,14 @@ The MVP is complete when all of the following are true:
 - CI skeleton
 - health endpoint
 
-### Milestone 2 — Persistence
+### Milestone 2 - Persistence
 
 - database migrations
 - dataset entities and endpoints
 - validation profile and rule entities
 - repository integration tests
 
-### Milestone 3 — Ingestion
+### Milestone 3 - Ingestion
 
 - CSV upload
 - file metadata
@@ -280,7 +280,7 @@ The MVP is complete when all of the following are true:
 - parser error handling
 - validation-run lifecycle
 
-### Milestone 4 — Validation engine
+### Milestone 4 - Validation engine
 
 - deterministic rule interface
 - five rule implementations
@@ -288,7 +288,7 @@ The MVP is complete when all of the following are true:
 - run summary calculation
 - unit and integration tests
 
-### Milestone 5 — Frontend
+### Milestone 5 - Frontend
 
 - dataset list
 - run list
@@ -296,7 +296,7 @@ The MVP is complete when all of the following are true:
 - issue filtering
 - error and loading states
 
-### Milestone 6 — Reporting and operations
+### Milestone 6 - Reporting and operations
 
 - JSON and CSV report export
 - structured logs
