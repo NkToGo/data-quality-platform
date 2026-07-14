@@ -1,0 +1,26 @@
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Java and Maven
+backend/target/
+*.class
+hs_err_pid*
+
+# Node and frontend build output
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+
+# Logs and temporary files
+*.log
+*.tmp
+.cache/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
