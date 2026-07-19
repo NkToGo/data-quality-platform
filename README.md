@@ -4,26 +4,29 @@ The Data Quality Platform is a learning and software-engineering project for bui
 
 ## Current status
 
-Milestone 1 provides the project foundation:
+Milestone 1 provides the project foundation. The first Milestone 2 implementation step adds the PostgreSQL persistence foundation:
 
 - a Java 21 and Spring Boot backend
 - a React and TypeScript frontend
 - a local PostgreSQL service through Docker Compose
+- environment-backed backend datasource configuration
+- Spring Data JPA, Bean Validation, and Flyway infrastructure
+- a PostgreSQL Testcontainers integration test
 - backend and frontend tests and formatting checks
 - a GitHub Actions workflow for repository checks
 
-The backend currently exposes only the Actuator health endpoint. The frontend is a static application shell. PostgreSQL is available for local development but is not connected to the backend yet.
+The backend currently exposes only the Actuator health endpoint. It connects to PostgreSQL at startup, and the health aggregation includes database availability. The frontend remains a static application shell. Flyway is enabled, but no application migrations or business tables exist yet.
 
-Dataset management, persistence, CSV uploads, validation rules, reports, authentication, and AI features are not implemented in Milestone 1.
+Dataset management, dataset entities, repositories, CSV uploads, validation rules, reports, authentication, and AI features are not implemented yet.
 
 ## Repository layout
 
 ```text
-backend/                 Spring Boot application and Maven Wrapper
+backend/                 Spring Boot application, persistence foundation, and Maven Wrapper
 frontend/                React, TypeScript, and Vite application
 .github/workflows/       Continuous integration checks
 compose.yaml             Local PostgreSQL service
-.env.example             Example local database configuration
+.env.example             Example local database and datasource configuration
 PROJECT_BRIEF.md         Product scope and milestone definition
 ```
 
@@ -31,7 +34,7 @@ PROJECT_BRIEF.md         Product scope and milestone definition
 
 - Java Development Kit 21
 - Node.js 24 LTS and npm 11
-- Docker with Docker Compose, required only for PostgreSQL
+- Docker with Docker Compose, required for the local database and backend integration tests
 
 Maven does not need to be installed globally because the backend includes the Maven Wrapper.
 
@@ -53,12 +56,15 @@ Copy-Item .env.example .env
 
 The available variables are:
 
+- `POSTGRES_HOST`: backend database host, defaults to `localhost`
 - `POSTGRES_DB`: database name, defaults to `data_quality`
 - `POSTGRES_USER`: database user, defaults to `data_quality`
 - `POSTGRES_PASSWORD`: required local password
 - `POSTGRES_PORT`: host port, defaults to `5432`
 
 The PostgreSQL port is bound to `127.0.0.1` and is not exposed on external network interfaces.
+
+Docker Compose reads `.env` automatically. Spring Boot does not, so load the same variables into the backend process environment before starting it. Spring Boot's standard `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, and `SPRING_DATASOURCE_PASSWORD` variables can override the composed local settings when needed.
 
 ## Run locally
 
@@ -75,23 +81,30 @@ Stop PostgreSQL without deleting its persistent volume:
 docker compose down
 ```
 
-PostgreSQL is optional for the current backend because persistence starts in Milestone 2.
-
-Run the backend on Unix-like systems:
+Run the backend on Unix-like systems after loading the root `.env`:
 
 ```sh
 cd backend
+set -a
+. ../.env
+set +a
 ./mvnw spring-boot:run
 ```
 
-Run the backend on Windows PowerShell:
+Run the backend on Windows PowerShell after loading the root `.env`:
 
 ```powershell
 cd backend
+Get-Content ..\.env |
+  Where-Object { $_ -match '^[^#\s][^=]*=' } |
+  ForEach-Object {
+    $name, $value = $_ -split '=', 2
+    Set-Item -Path "Env:$name" -Value $value
+  }
 .\mvnw.cmd spring-boot:run
 ```
 
-The backend listens on `http://localhost:8080`. Its health endpoint is `http://localhost:8080/actuator/health`.
+The backend listens on `http://localhost:8080`. Its health endpoint is `http://localhost:8080/actuator/health`. A missing or incorrect database password causes startup to fail when Flyway connects.
 
 Run the frontend on Unix-like systems:
 
@@ -123,11 +136,13 @@ Run these commands from `backend/`. Replace `./mvnw` with `.\mvnw.cmd` on Window
 ./mvnw verify
 ```
 
-- `test` runs the Spring Boot context test.
+- `test` starts an isolated PostgreSQL Testcontainer and runs the Spring Boot integration test.
 - `package` runs tests and creates the executable JAR in `backend/target/`.
 - `spotless:check` verifies Java formatting.
 - `spotless:apply` formats Java source files.
 - `verify` runs the complete backend build, including tests and the formatting check.
+
+Docker must be running for `test`, `package`, and `verify`. The integration test uses its own disposable database and does not use the local Compose database or `.env`.
 
 ## Frontend commands
 
@@ -164,13 +179,13 @@ docker compose --env-file .env.example config --quiet
 
 The GitHub Actions workflow runs three independent jobs on pushes and pull requests:
 
-- backend Maven verification on Java 21
+- backend Maven verification on Java 21 with an isolated PostgreSQL Testcontainer
 - frontend install, lint, formatting, test, and build checks on Node.js 24
 - Docker Compose configuration validation
 
 ## Planned milestones
 
-- Milestone 2: PostgreSQL persistence, migrations, datasets, validation profiles, and rules
+- Milestone 2 remaining work: database migrations, datasets, validation profiles, and rules
 - Milestone 3: CSV ingestion and validation-run lifecycle
 - Milestone 4: deterministic validation rules and issue persistence
 - Milestone 5: dataset, run, summary, and issue screens
