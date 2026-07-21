@@ -4,7 +4,7 @@ The Data Quality Platform is a learning and software-engineering project for bui
 
 ## Current status
 
-Milestone 1 provides the project foundation. Milestone 2 currently includes the PostgreSQL persistence foundation and the Dataset metadata vertical slice:
+Milestone 1 provides the project foundation. Milestone 2 currently includes the PostgreSQL persistence foundation, the Dataset metadata vertical slice, and the Validation Profile vertical slice:
 
 - a Java 21 and Spring Boot backend
 - a React and TypeScript frontend
@@ -12,19 +12,21 @@ Milestone 1 provides the project foundation. Milestone 2 currently includes the 
 - environment-backed backend datasource configuration
 - Spring Data JPA, Bean Validation, and Flyway infrastructure
 - a Flyway-managed `dataset` table
+- a Flyway-managed `validation_profile` table related to its parent Dataset
 - Dataset create, list, and detail REST endpoints
+- Validation Profile create and list REST endpoints nested under a Dataset
 - PostgreSQL Testcontainers repository and API integration tests
 - backend and frontend tests and formatting checks
 - a GitHub Actions workflow for repository checks
 
-The backend connects to PostgreSQL at startup, applies the Dataset migration through Flyway, and validates the JPA mapping without generating schema changes. It exposes the Actuator health endpoint and the Dataset endpoints documented below. The frontend remains a static application shell.
+The backend connects to PostgreSQL at startup, applies the Dataset and Validation Profile migrations through Flyway, and validates the JPA mappings without generating schema changes. It exposes the Actuator health endpoint and the Dataset and Validation Profile endpoints documented below. The frontend remains a static application shell.
 
-Dataset metadata can be created, listed, and retrieved. Dataset updates, deletion, pagination, CSV uploads, validation profiles, validation rules, validation runs, reports, authentication, and AI features are not implemented yet.
+Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Dataset and profile updates or deletion, profile detail retrieval, pagination, validation rules, CSV uploads, validation runs, reports, authentication, and AI features are not implemented yet.
 
 ## Repository layout
 
 ```text
-backend/                 Spring Boot application, Dataset API, persistence, and Maven Wrapper
+backend/                 Spring Boot application, Dataset and Validation Profile APIs, persistence, and Maven Wrapper
 frontend/                React, TypeScript, and Vite application
 .github/workflows/       Continuous integration checks
 compose.yaml             Local PostgreSQL service
@@ -182,6 +184,84 @@ Invoke-RestMethod http://localhost:8080/api/datasets
 Invoke-RestMethod "http://localhost:8080/api/datasets/$($created.id)"
 ```
 
+## Validation Profile API
+
+A Validation Profile belongs to one Dataset and contains a generated UUID, the parent Dataset UUID, a required name, and a creation timestamp.
+
+Available endpoints:
+
+- `POST /api/datasets/{datasetId}/profiles`: create a Validation Profile for a Dataset
+- `GET /api/datasets/{datasetId}/profiles`: list a Dataset's Validation Profiles
+
+Create request:
+
+```http
+POST /api/datasets/47d9bea4-1130-4b9b-8fb3-ea23893d51e5/profiles
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "Default validation"
+}
+```
+
+The name is required, must contain a non-whitespace character, and has a maximum length of 255 characters. Profile names do not need to be unique, including within the same Dataset.
+
+A successful create request returns `201 Created` without a `Location` header because a profile detail endpoint is not implemented. The response contains only the persisted profile metadata:
+
+```json
+{
+  "id": "6dc81327-2a6b-46c9-9a09-43a64f989ac2",
+  "datasetId": "47d9bea4-1130-4b9b-8fb3-ea23893d51e5",
+  "name": "Default validation",
+  "createdAt": "2026-07-21T12:34:56.123456Z"
+}
+```
+
+The list endpoint returns `200 OK` with profiles ordered by `createdAt` ascending and then by `id` ascending. It returns `[]` when the Dataset exists but has no profiles.
+
+Both endpoints require the parent Dataset to exist. A valid but unknown Dataset UUID returns `404 Not Found` with an `application/problem+json` response. The `instance` contains the requested nested resource path:
+
+```json
+{
+  "title": "Dataset not found",
+  "status": 404,
+  "detail": "Dataset '47d9bea4-1130-4b9b-8fb3-ea23893d51e5' was not found.",
+  "instance": "/api/datasets/47d9bea4-1130-4b9b-8fb3-ea23893d51e5/profiles"
+}
+```
+
+A malformed Dataset UUID returns `400 Bad Request`. An unknown Dataset does not produce an empty profile list and a failed create request does not write a profile.
+
+After creating a Dataset, smoke-test the Validation Profile API from a Unix-like shell. Replace the example value with the created Dataset UUID:
+
+```sh
+DATASET_ID=REPLACE_WITH_DATASET_ID
+
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"name":"Default validation"}' \
+  "http://localhost:8080/api/datasets/$DATASET_ID/profiles"
+
+curl --fail-with-body \
+  "http://localhost:8080/api/datasets/$DATASET_ID/profiles"
+```
+
+Windows PowerShell, continuing from the Dataset API example above:
+
+```powershell
+$profile = Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8080/api/datasets/$($created.id)/profiles" `
+  -ContentType application/json `
+  -Body '{"name":"Default validation"}'
+
+$profile
+Invoke-RestMethod "http://localhost:8080/api/datasets/$($created.id)/profiles"
+```
+
 Run the frontend on Unix-like systems:
 
 ```sh
@@ -261,7 +341,7 @@ The GitHub Actions workflow runs three independent jobs on pushes and pull reque
 
 ## Planned milestones
 
-- Milestone 2 remaining work: validation profile and validation rule persistence and endpoints
+- Milestone 2 remaining work: validation rule persistence and endpoints
 - Milestone 3: CSV ingestion and validation-run lifecycle
 - Milestone 4: deterministic validation rules and issue persistence
 - Milestone 5: dataset, run, summary, and issue screens

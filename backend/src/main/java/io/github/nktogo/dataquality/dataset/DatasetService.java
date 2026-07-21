@@ -33,9 +33,12 @@ class DatasetService {
 
   @Transactional(readOnly = true)
   DatasetResponse getById(UUID datasetId) {
+    return toResponse(requireExisting(datasetId));
+  }
+
+  Dataset requireExisting(UUID datasetId) {
     return datasetRepository
         .findById(datasetId)
-        .map(DatasetService::toResponse)
         .orElseThrow(() -> new DatasetNotFoundException(datasetId));
   }
 

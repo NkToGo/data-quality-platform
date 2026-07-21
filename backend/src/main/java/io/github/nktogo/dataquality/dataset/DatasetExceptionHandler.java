@@ -7,7 +7,8 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice(assignableTypes = DatasetController.class)
+@RestControllerAdvice(
+    assignableTypes = {DatasetController.class, ValidationProfileController.class})
 class DatasetExceptionHandler {
 
   @ExceptionHandler(DatasetNotFoundException.class)
