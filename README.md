@@ -21,7 +21,7 @@ Milestone 1 provides the project foundation. Milestone 2 includes the PostgreSQL
 - backend and frontend tests and formatting checks
 - a GitHub Actions workflow for repository checks
 
-The backend connects to PostgreSQL at startup, applies the Dataset, Validation Profile, and Validation Rule migrations through Flyway, and validates the JPA mappings without generating schema changes. It exposes the Actuator health endpoint and the Dataset, Validation Profile, and Validation Rule endpoints documented below. The frontend remains a static application shell.
+The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies the Dataset, Validation Profile, and Validation Rule migrations. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, and Validation Rule endpoints documented below. The frontend remains a static application shell.
 
 Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile. Rule execution and rule-specific parameter validation are not implemented. Dataset, profile, and rule updates or deletion, profile and rule detail retrieval, pagination, CSV uploads, validation runs, reports, authentication, and AI features are also not implemented yet.
 
@@ -119,7 +119,7 @@ The current API manages Dataset metadata only. A Dataset contains a generated UU
 Available endpoints:
 
 - `POST /api/datasets`: create a Dataset
-- `GET /api/datasets`: list Datasets in creation order
+- `GET /api/datasets`: list Datasets by `createdAt` ascending, then `id` ascending
 - `GET /api/datasets/{datasetId}`: retrieve one Dataset by UUID
 
 Create request:
@@ -149,7 +149,7 @@ A successful create request returns `201 Created`, a `Location` header for the n
 }
 ```
 
-The list endpoint returns `200 OK` with an array of the same response objects. It returns `[]` when no Datasets exist. The detail endpoint returns `200 OK` for an existing UUID. An unknown UUID returns `404 Not Found` with an `application/problem+json` response:
+The list endpoint returns `200 OK` with an array of the same response objects ordered by `createdAt` ascending, then `id` ascending. It returns `[]` when no Datasets exist. The detail endpoint returns `200 OK` for an existing UUID. An unknown UUID returns `404 Not Found` with an `application/problem+json` response:
 
 ```json
 {
@@ -159,6 +159,8 @@ The list endpoint returns `200 OK` with an array of the same response objects. I
   "instance": "/api/datasets/47d9bea4-1130-4b9b-8fb3-ea23893d51e5"
 }
 ```
+
+A malformed Dataset UUID returns `400 Bad Request`.
 
 After starting PostgreSQL and the backend, smoke-test the API from a Unix-like shell:
 
@@ -350,6 +352,10 @@ $rule = Invoke-RestMethod `
 $rule
 Invoke-RestMethod "http://localhost:8080/api/profiles/$($profile.id)/rules"
 ```
+
+## Persistence relationships
+
+Validation Profiles require an existing Dataset, and Validation Rules require an existing Validation Profile. Both foreign keys use `ON DELETE RESTRICT`, and no cascading deletion is configured. If rows are removed directly during local cleanup, delete Validation Rules first, then Validation Profiles, then Datasets.
 
 Run the frontend on Unix-like systems:
 
