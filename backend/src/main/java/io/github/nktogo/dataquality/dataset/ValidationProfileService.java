@@ -37,6 +37,12 @@ class ValidationProfileService {
         .toList();
   }
 
+  ValidationProfile requireExisting(UUID profileId) {
+    return validationProfileRepository
+        .findById(profileId)
+        .orElseThrow(() -> new ValidationProfileNotFoundException(profileId));
+  }
+
   private static ValidationProfileResponse toResponse(ValidationProfile validationProfile) {
     return new ValidationProfileResponse(
         validationProfile.getId(),

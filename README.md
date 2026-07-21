@@ -4,7 +4,7 @@ The Data Quality Platform is a learning and software-engineering project for bui
 
 ## Current status
 
-Milestone 1 provides the project foundation. Milestone 2 currently includes the PostgreSQL persistence foundation, the Dataset metadata vertical slice, and the Validation Profile vertical slice:
+Milestone 1 provides the project foundation. Milestone 2 includes the PostgreSQL persistence foundation and the Dataset, Validation Profile, and Validation Rule persistence vertical slices:
 
 - a Java 21 and Spring Boot backend
 - a React and TypeScript frontend
@@ -13,20 +13,22 @@ Milestone 1 provides the project foundation. Milestone 2 currently includes the 
 - Spring Data JPA, Bean Validation, and Flyway infrastructure
 - a Flyway-managed `dataset` table
 - a Flyway-managed `validation_profile` table related to its parent Dataset
+- a Flyway-managed `validation_rule` table related to its parent Validation Profile, with rule parameters stored as PostgreSQL `jsonb`
 - Dataset create, list, and detail REST endpoints
 - Validation Profile create and list REST endpoints nested under a Dataset
+- Validation Rule create and list REST endpoints nested under a Validation Profile
 - PostgreSQL Testcontainers repository and API integration tests
 - backend and frontend tests and formatting checks
 - a GitHub Actions workflow for repository checks
 
-The backend connects to PostgreSQL at startup, applies the Dataset and Validation Profile migrations through Flyway, and validates the JPA mappings without generating schema changes. It exposes the Actuator health endpoint and the Dataset and Validation Profile endpoints documented below. The frontend remains a static application shell.
+The backend connects to PostgreSQL at startup, applies the Dataset, Validation Profile, and Validation Rule migrations through Flyway, and validates the JPA mappings without generating schema changes. It exposes the Actuator health endpoint and the Dataset, Validation Profile, and Validation Rule endpoints documented below. The frontend remains a static application shell.
 
-Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Dataset and profile updates or deletion, profile detail retrieval, pagination, validation rules, CSV uploads, validation runs, reports, authentication, and AI features are not implemented yet.
+Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile. Rule execution and rule-specific parameter validation are not implemented. Dataset, profile, and rule updates or deletion, profile and rule detail retrieval, pagination, CSV uploads, validation runs, reports, authentication, and AI features are also not implemented yet.
 
 ## Repository layout
 
 ```text
-backend/                 Spring Boot application, Dataset and Validation Profile APIs, persistence, and Maven Wrapper
+backend/                 Spring Boot application, Dataset, Profile, and Rule APIs, persistence, and Maven Wrapper
 frontend/                React, TypeScript, and Vite application
 .github/workflows/       Continuous integration checks
 compose.yaml             Local PostgreSQL service
@@ -262,6 +264,93 @@ $profile
 Invoke-RestMethod "http://localhost:8080/api/datasets/$($created.id)/profiles"
 ```
 
+## Validation Rule API
+
+A Validation Rule belongs to one Validation Profile. It contains a generated UUID, the parent Profile UUID, a field name, a rule type, a parameters object, a severity, and an enabled flag.
+
+Available endpoints:
+
+- `POST /api/profiles/{profileId}/rules`: create a Validation Rule for a Profile
+- `GET /api/profiles/{profileId}/rules`: list a Profile's Validation Rules
+
+Create request:
+
+```http
+POST /api/profiles/6dc81327-2a6b-46c9-9a09-43a64f989ac2/rules
+Content-Type: application/json
+```
+
+```json
+{
+  "fieldName": "email",
+  "ruleType": "REQUIRED_FIELD",
+  "parameters": {},
+  "severity": "ERROR",
+  "enabled": true
+}
+```
+
+The `fieldName` is required, must contain a non-whitespace character, and has a maximum length of 255 characters. The supported rule types are `REQUIRED_FIELD`, `DATA_TYPE`, `UNIQUENESS`, `NUMERIC_RANGE`, and `DATE_FORMAT`. Severity must be `ERROR` or `WARNING`. The `enabled` value is required and must be a Boolean.
+
+`parameters` is required and must be a JSON object. Empty and nested objects are accepted and stored in the V3 migration's PostgreSQL `jsonb` column. The API treats this object as opaque configuration in this milestone. It does not yet validate rule-specific parameter names or values, and it does not execute rules. Missing or null required values, unsupported enum values, scalar or array parameters, and invalid field names return `400 Bad Request`. Duplicate or overlapping rules are allowed.
+
+A successful create request returns `201 Created` without a `Location` header because a rule detail endpoint is not implemented. The response contains only the persisted rule configuration:
+
+```json
+{
+  "id": "32388666-f9dc-4500-96f8-d49f7bf75315",
+  "profileId": "6dc81327-2a6b-46c9-9a09-43a64f989ac2",
+  "fieldName": "email",
+  "ruleType": "REQUIRED_FIELD",
+  "parameters": {},
+  "severity": "ERROR",
+  "enabled": true
+}
+```
+
+The list endpoint returns `200 OK` with rules ordered by `id` ascending in PostgreSQL. This deterministic order does not represent creation or execution order. It returns `[]` when the Profile exists but has no rules.
+
+Both endpoints require the parent Validation Profile to exist. A valid but unknown Profile UUID returns `404 Not Found` with an `application/problem+json` response:
+
+```json
+{
+  "title": "Validation Profile not found",
+  "status": 404,
+  "detail": "Validation Profile '6dc81327-2a6b-46c9-9a09-43a64f989ac2' was not found.",
+  "instance": "/api/profiles/6dc81327-2a6b-46c9-9a09-43a64f989ac2/rules"
+}
+```
+
+A malformed Profile UUID returns `400 Bad Request`. An unknown Profile does not produce an empty rule list and a failed create request does not write a rule.
+
+After creating a Validation Profile, smoke-test the Validation Rule API from a Unix-like shell. Replace the example value with the created Profile UUID:
+
+```sh
+PROFILE_ID=REPLACE_WITH_PROFILE_ID
+
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"fieldName":"email","ruleType":"REQUIRED_FIELD","parameters":{},"severity":"ERROR","enabled":true}' \
+  "http://localhost:8080/api/profiles/$PROFILE_ID/rules"
+
+curl --fail-with-body \
+  "http://localhost:8080/api/profiles/$PROFILE_ID/rules"
+```
+
+Windows PowerShell, continuing from the Validation Profile API example above:
+
+```powershell
+$rule = Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8080/api/profiles/$($profile.id)/rules" `
+  -ContentType application/json `
+  -Body '{"fieldName":"email","ruleType":"REQUIRED_FIELD","parameters":{},"severity":"ERROR","enabled":true}'
+
+$rule
+Invoke-RestMethod "http://localhost:8080/api/profiles/$($profile.id)/rules"
+```
+
 Run the frontend on Unix-like systems:
 
 ```sh
@@ -341,7 +430,7 @@ The GitHub Actions workflow runs three independent jobs on pushes and pull reque
 
 ## Planned milestones
 
-- Milestone 2 remaining work: validation rule persistence and endpoints
+- Milestone 2: complete, with PostgreSQL persistence and Dataset, Validation Profile, and Validation Rule REST vertical slices
 - Milestone 3: CSV ingestion and validation-run lifecycle
 - Milestone 4: deterministic validation rules and issue persistence
 - Milestone 5: dataset, run, summary, and issue screens
