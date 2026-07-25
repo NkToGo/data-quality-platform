@@ -31,9 +31,9 @@ function App() {
           <h2 id="foundation-heading">Project foundation</h2>
           <p>
             The React application shell, Spring Boot service, local PostgreSQL configuration, and
-            automated checks are in place. PostgreSQL-backed Dataset, Validation Profile, and
-            Validation Rule APIs are available in the backend. The frontend shell does not call
-            these APIs yet.
+            automated checks are in place. PostgreSQL-backed Dataset, Validation Profile, Validation
+            Rule, and SourceFile upload APIs are available in the backend. The frontend shell does
+            not call these APIs yet.
           </p>
         </section>
 

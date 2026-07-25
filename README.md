@@ -4,7 +4,7 @@ The Data Quality Platform is a learning and software-engineering project for bui
 
 ## Current status
 
-Milestone 1 provides the project foundation. Milestone 2 includes the PostgreSQL persistence foundation and the Dataset, Validation Profile, and Validation Rule persistence vertical slices:
+Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQL persistence foundation and the Dataset, Validation Profile, and Validation Rule persistence vertical slices. Milestone 3 is in progress with the SourceFile upload foundation:
 
 - a Java 21 and Spring Boot backend
 - a React and TypeScript frontend
@@ -14,21 +14,23 @@ Milestone 1 provides the project foundation. Milestone 2 includes the PostgreSQL
 - a Flyway-managed `dataset` table
 - a Flyway-managed `validation_profile` table related to its parent Dataset
 - a Flyway-managed `validation_rule` table related to its parent Validation Profile, with rule parameters stored as PostgreSQL `jsonb`
+- a Flyway-managed `source_file` table that stores upload metadata and private file contents
 - Dataset create, list, and detail REST endpoints
 - Validation Profile create and list REST endpoints nested under a Dataset
 - Validation Rule create and list REST endpoints nested under a Validation Profile
+- a Dataset-nested multipart CSV upload endpoint with a SHA-256 checksum
 - PostgreSQL Testcontainers repository and API integration tests
 - backend and frontend tests and formatting checks
 - a GitHub Actions workflow for repository checks
 
-The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies the Dataset, Validation Profile, and Validation Rule migrations. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, and Validation Rule endpoints documented below. The frontend remains a static application shell.
+The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies the Dataset, Validation Profile, Validation Rule, and SourceFile migrations. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, Validation Rule, and SourceFile endpoints documented below. The frontend remains a static application shell.
 
-Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile. Rule execution and rule-specific parameter validation are not implemented. Dataset, profile, and rule updates or deletion, profile and rule detail retrieval, pagination, CSV uploads, validation runs, reports, authentication, and AI features are also not implemented yet.
+Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. CSV parsing, parser error handling, Validation Runs, rule execution, and rule-specific parameter validation are not implemented. Dataset, profile, rule, and SourceFile updates or deletion, profile, rule, and SourceFile detail retrieval, pagination, reports, authentication, and AI features are also not implemented yet.
 
 ## Repository layout
 
 ```text
-backend/                 Spring Boot application, Dataset, Profile, and Rule APIs, persistence, and Maven Wrapper
+backend/                 Spring Boot application, persistence, REST APIs, ingestion foundation, and Maven Wrapper
 frontend/                React, TypeScript, and Vite application
 .github/workflows/       Continuous integration checks
 compose.yaml             Local PostgreSQL service
@@ -67,10 +69,12 @@ The available variables are:
 - `POSTGRES_USER`: database user, defaults to `data_quality`
 - `POSTGRES_PASSWORD`: required local password
 - `POSTGRES_PORT`: host port, defaults to `5432`
+- `SOURCE_FILE_MAX_SIZE`: maximum uploaded file size, defaults to `10MB`
+- `SOURCE_FILE_MAX_REQUEST_SIZE`: multipart request limit, defaults to `11MB`
 
 The PostgreSQL port is bound to `127.0.0.1` and is not exposed on external network interfaces.
 
-Docker Compose reads `.env` automatically. Spring Boot does not, so load the same variables into the backend process environment before starting it. Spring Boot's standard `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, and `SPRING_DATASOURCE_PASSWORD` variables can override the composed local settings when needed.
+Docker Compose reads `.env` automatically. Spring Boot does not, so load the same variables into the backend process environment before starting it. Spring Boot's standard `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, and `SPRING_DATASOURCE_PASSWORD` variables can override the composed local settings when needed. The multipart request limit includes headers and must remain greater than the SourceFile size limit.
 
 ## Run locally
 
@@ -187,6 +191,69 @@ $created = Invoke-RestMethod `
 Invoke-RestMethod http://localhost:8080/api/datasets
 Invoke-RestMethod "http://localhost:8080/api/datasets/$($created.id)"
 ```
+
+## SourceFile upload API
+
+A SourceFile belongs to one Dataset. The backend stores the exact uploaded bytes privately in PostgreSQL together with a generated UUID, the parent Dataset UUID, the stored filename basename, the submitted content type, the byte count, a SHA-256 checksum, and an upload timestamp.
+
+Available endpoint:
+
+- `POST /api/datasets/{datasetId}/files`: upload one CSV file for a Dataset
+
+The request must use `multipart/form-data` with one part named `file`. Files must be nonempty, no larger than the configured maximum, and have a basename of at most 255 characters ending in `.csv` case-insensitively. Submitted path components are removed before the filename is stored.
+
+The submitted MIME type is recorded as metadata, has a maximum length of 255 characters, and is not treated as proof that the content is valid CSV. Missing or blank MIME types are stored as `application/octet-stream`. Actual CSV parsing and semantic validation are deferred.
+
+A successful upload returns `201 Created` without a `Location` header because no SourceFile detail endpoint exists. The response contains only metadata:
+
+```json
+{
+  "id": "54985ec5-103b-4d2b-95f3-0b57e2d74336",
+  "datasetId": "47d9bea4-1130-4b9b-8fb3-ea23893d51e5",
+  "originalFilename": "customers.csv",
+  "contentType": "text/csv",
+  "sizeBytes": 128,
+  "sha256": "a7b64b6df8f231b5f111e4e7bdba8af0c81c8639f33d48c7206ec66a10cb8ef0",
+  "uploadedAt": "2026-07-25T12:34:56.123456Z"
+}
+```
+
+The checksum is a 64-character lowercase hexadecimal SHA-256 value calculated over the exact stored bytes. Duplicate filenames and duplicate checksums are allowed. File contents are never returned by the API.
+
+An invalid upload returns `400 Bad Request`. An upload over the configured limit returns `413 Payload Too Large`. A malformed Dataset UUID returns `400 Bad Request`. A valid but unknown Dataset UUID returns the existing Dataset `404 Not Found` Problem Details response with the upload path as its `instance`. Failed requests do not persist a SourceFile.
+
+After creating a Dataset, upload a CSV from a Unix-like shell:
+
+```sh
+curl --fail-with-body \
+  --request POST \
+  --form 'file=@customers.csv;type=text/csv' \
+  "http://localhost:8080/api/datasets/REPLACE_WITH_DATASET_ID/files"
+```
+
+Windows PowerShell, continuing from the Dataset API example:
+
+```powershell
+$csvPath = Join-Path $env:TEMP "customers.csv"
+[System.IO.File]::WriteAllText(
+  $csvPath,
+  "email,age`nalice@example.com,30`n",
+  [System.Text.UTF8Encoding]::new($false)
+)
+
+$expectedHash = (Get-FileHash $csvPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+$uploaded = curl.exe --silent --show-error `
+  --request POST `
+  --form "file=@$csvPath;type=text/csv" `
+  "http://localhost:8080/api/datasets/$($created.id)/files" |
+  ConvertFrom-Json
+
+$uploaded
+$expectedHash
+```
+
+No SourceFile list, detail, download, or deletion endpoint is implemented. Uploading a SourceFile does not parse it or create a Validation Run.
 
 ## Validation Profile API
 
@@ -355,7 +422,7 @@ Invoke-RestMethod "http://localhost:8080/api/profiles/$($profile.id)/rules"
 
 ## Persistence relationships
 
-Validation Profiles require an existing Dataset, and Validation Rules require an existing Validation Profile. Both foreign keys use `ON DELETE RESTRICT`, and no cascading deletion is configured. If rows are removed directly during local cleanup, delete Validation Rules first, then Validation Profiles, then Datasets.
+Validation Profiles and SourceFiles require an existing Dataset, and Validation Rules require an existing Validation Profile. All three foreign keys use `ON DELETE RESTRICT`, and no cascading deletion is configured. If rows are removed directly during local cleanup, delete Validation Rules before Validation Profiles, and delete SourceFiles before Datasets.
 
 Run the frontend on Unix-like systems:
 
@@ -437,7 +504,7 @@ The GitHub Actions workflow runs three independent jobs on pushes and pull reque
 ## Planned milestones
 
 - Milestone 2: complete, with PostgreSQL persistence and Dataset, Validation Profile, and Validation Rule REST vertical slices
-- Milestone 3: CSV ingestion and validation-run lifecycle
+- Milestone 3: in progress, with the SourceFile upload foundation implemented and CSV parsing and the Validation Run lifecycle still planned
 - Milestone 4: deterministic validation rules and issue persistence
 - Milestone 5: dataset, run, summary, and issue screens
 - Milestone 6: report export, structured logs, runtime metrics, and final documentation

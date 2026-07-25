@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-class DatasetService {
+class DatasetService implements DatasetAccess {
 
   private final DatasetRepository datasetRepository;
 
@@ -34,6 +34,11 @@ class DatasetService {
   @Transactional(readOnly = true)
   DatasetResponse getById(UUID datasetId) {
     return toResponse(requireExisting(datasetId));
+  }
+
+  @Override
+  public void requireDataset(UUID datasetId) {
+    requireExisting(datasetId);
   }
 
   Dataset requireExisting(UUID datasetId) {
