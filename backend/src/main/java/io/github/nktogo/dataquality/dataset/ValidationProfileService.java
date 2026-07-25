@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-class ValidationProfileService {
+class ValidationProfileService implements ValidationProfileAccess {
 
   private final ValidationProfileRepository validationProfileRepository;
   private final DatasetService datasetService;
@@ -40,6 +40,14 @@ class ValidationProfileService {
   ValidationProfile requireExisting(UUID profileId) {
     return validationProfileRepository
         .findById(profileId)
+        .orElseThrow(() -> new ValidationProfileNotFoundException(profileId));
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public UUID requireValidationProfileDatasetId(UUID profileId) {
+    return validationProfileRepository
+        .findDatasetIdById(profileId)
         .orElseThrow(() -> new ValidationProfileNotFoundException(profileId));
   }
 

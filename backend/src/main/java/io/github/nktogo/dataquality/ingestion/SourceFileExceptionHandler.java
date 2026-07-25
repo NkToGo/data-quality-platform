@@ -11,6 +11,13 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 @RestControllerAdvice
 class SourceFileExceptionHandler {
 
+  @ExceptionHandler(SourceFileNotFoundException.class)
+  ProblemDetail handleSourceFileNotFound(
+      SourceFileNotFoundException exception, HttpServletRequest request) {
+    return problemDetail(
+        HttpStatus.NOT_FOUND, "Source file not found", exception.getMessage(), request);
+  }
+
   @ExceptionHandler(InvalidSourceFileException.class)
   ProblemDetail handleInvalidSourceFile(
       InvalidSourceFileException exception, HttpServletRequest request) {

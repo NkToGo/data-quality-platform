@@ -4,7 +4,7 @@ The Data Quality Platform is a learning and software-engineering project for bui
 
 ## Current status
 
-Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQL persistence foundation and the Dataset, Validation Profile, and Validation Rule persistence vertical slices. Milestone 3 is in progress with the SourceFile upload foundation:
+Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQL persistence foundation and the Dataset, Validation Profile, and Validation Rule persistence vertical slices. Milestone 3 is in progress with the SourceFile upload and Validation Run creation foundations:
 
 - a Java 21 and Spring Boot backend
 - a React and TypeScript frontend
@@ -15,17 +15,19 @@ Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQ
 - a Flyway-managed `validation_profile` table related to its parent Dataset
 - a Flyway-managed `validation_rule` table related to its parent Validation Profile, with rule parameters stored as PostgreSQL `jsonb`
 - a Flyway-managed `source_file` table that stores upload metadata and private file contents
+- a Flyway-managed V5 `validation_run` table related to its Dataset, SourceFile, and Validation Profile
 - Dataset create, list, and detail REST endpoints
 - Validation Profile create and list REST endpoints nested under a Dataset
 - Validation Rule create and list REST endpoints nested under a Validation Profile
 - a Dataset-nested multipart CSV upload endpoint with a SHA-256 checksum
+- a SourceFile-nested endpoint that creates a pending Validation Run
 - PostgreSQL Testcontainers repository and API integration tests
 - backend and frontend tests and formatting checks
 - a GitHub Actions workflow for repository checks
 
-The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies the Dataset, Validation Profile, Validation Rule, and SourceFile migrations. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, Validation Rule, and SourceFile endpoints documented below. The frontend remains a static application shell.
+The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies the Dataset, Validation Profile, Validation Rule, SourceFile, and Validation Run migrations. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, Validation Rule, SourceFile upload, and Validation Run creation endpoints documented below. The frontend remains a static application shell.
 
-Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. CSV parsing, parser error handling, Validation Runs, rule execution, and rule-specific parameter validation are not implemented. Dataset, profile, rule, and SourceFile updates or deletion, profile, rule, and SourceFile detail retrieval, pagination, reports, authentication, and AI features are also not implemented yet.
+Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. A pending Validation Run can be created for a SourceFile and a Validation Profile from the same Dataset. CSV parsing, parser error handling, Validation Run processing transitions, rule execution, and rule-specific parameter validation are not implemented. Dataset, profile, rule, SourceFile, and Validation Run updates or deletion, profile, rule, SourceFile, and Validation Run detail retrieval, Validation Run listing, pagination, reports, authentication, and AI features are also not implemented yet.
 
 ## Repository layout
 
@@ -253,7 +255,7 @@ $uploaded
 $expectedHash
 ```
 
-No SourceFile list, detail, download, or deletion endpoint is implemented. Uploading a SourceFile does not parse it or create a Validation Run.
+No SourceFile list, detail, download, or deletion endpoint is implemented. Uploading a SourceFile does not parse it or automatically create a Validation Run.
 
 ## Validation Profile API
 
@@ -420,9 +422,106 @@ $rule
 Invoke-RestMethod "http://localhost:8080/api/profiles/$($profile.id)/rules"
 ```
 
+## Validation Run API
+
+A Validation Run belongs to one Dataset, one SourceFile, and one Validation Profile. The SourceFile and Validation Profile must belong to the same Dataset. The Dataset UUID is derived from the SourceFile and is not accepted from the client.
+
+Available endpoint:
+
+- `POST /api/files/{fileId}/validation-runs`: create a pending Validation Run
+
+The request must use `application/json` and contain only the Validation Profile UUID:
+
+```http
+POST /api/files/54985ec5-103b-4d2b-95f3-0b57e2d74336/validation-runs
+Content-Type: application/json
+```
+
+```json
+{
+  "profileId": "6dc81327-2a6b-46c9-9a09-43a64f989ac2"
+}
+```
+
+The `profileId` value is required. A missing, null, or malformed value returns `400 Bad Request`.
+
+A successful request returns `201 Created` without a `Location` header because a Validation Run detail endpoint is not implemented. The response contains exactly 12 fields:
+
+```json
+{
+  "id": "1d97a9a7-eb56-44da-a566-a9630f23cbcb",
+  "datasetId": "47d9bea4-1130-4b9b-8fb3-ea23893d51e5",
+  "sourceFileId": "54985ec5-103b-4d2b-95f3-0b57e2d74336",
+  "profileId": "6dc81327-2a6b-46c9-9a09-43a64f989ac2",
+  "status": "PENDING",
+  "totalRows": 0,
+  "validRows": 0,
+  "invalidRows": 0,
+  "issueCount": 0,
+  "startedAt": null,
+  "finishedAt": null,
+  "failureReason": null
+}
+```
+
+The defined lifecycle statuses are `PENDING`, `PROCESSING`, `COMPLETED`, and `FAILED`. This slice creates only `PENDING` Runs. The four counters start at zero, and the processing timestamps and failure reason start as `null`. Multiple Runs for the same SourceFile and Validation Profile are allowed and receive independent UUIDs.
+
+A valid but unknown SourceFile UUID returns `404 Not Found` with an `application/problem+json` response:
+
+```json
+{
+  "title": "Source file not found",
+  "status": 404,
+  "detail": "Source file '54985ec5-103b-4d2b-95f3-0b57e2d74336' was not found.",
+  "instance": "/api/files/54985ec5-103b-4d2b-95f3-0b57e2d74336/validation-runs"
+}
+```
+
+A valid but unknown Validation Profile UUID returns the existing `Validation Profile not found` response with the Validation Run request path as its `instance`. A malformed SourceFile UUID returns `400 Bad Request`.
+
+If the SourceFile and Validation Profile belong to different Datasets, the request returns `409 Conflict`:
+
+```json
+{
+  "title": "Validation Run parent mismatch",
+  "status": 409,
+  "detail": "Source file '54985ec5-103b-4d2b-95f3-0b57e2d74336' and Validation Profile '6dc81327-2a6b-46c9-9a09-43a64f989ac2' belong to different Datasets.",
+  "instance": "/api/files/54985ec5-103b-4d2b-95f3-0b57e2d74336/validation-runs"
+}
+```
+
+Failed requests do not persist a Validation Run.
+
+After uploading a SourceFile and creating a Validation Profile, create a Validation Run from a Unix-like shell:
+
+```sh
+FILE_ID=REPLACE_WITH_SOURCE_FILE_ID
+PROFILE_ID=REPLACE_WITH_PROFILE_ID
+
+curl --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --data "{\"profileId\":\"$PROFILE_ID\"}" \
+  "http://localhost:8080/api/files/$FILE_ID/validation-runs"
+```
+
+Windows PowerShell, continuing from the SourceFile and Validation Profile examples:
+
+```powershell
+$run = Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8080/api/files/$($uploaded.id)/validation-runs" `
+  -ContentType application/json `
+  -Body (@{ profileId = $profile.id } | ConvertTo-Json)
+
+$run
+```
+
+No Validation Run list, detail, update, deletion, processing, or retry endpoint is implemented. Run creation does not parse CSV content, execute Validation Rules, generate Validation Issues, calculate summaries, or transition the Run beyond `PENDING`.
+
 ## Persistence relationships
 
-Validation Profiles and SourceFiles require an existing Dataset, and Validation Rules require an existing Validation Profile. All three foreign keys use `ON DELETE RESTRICT`, and no cascading deletion is configured. If rows are removed directly during local cleanup, delete Validation Rules before Validation Profiles, and delete SourceFiles before Datasets.
+Validation Profiles and SourceFiles require an existing Dataset, Validation Rules require an existing Validation Profile, and Validation Runs require an existing Dataset, SourceFile, and Validation Profile. Validation Run creation also requires the SourceFile and Validation Profile to belong to the same Dataset. All foreign keys use `ON DELETE RESTRICT`, and no cascading deletion is configured. If rows are removed directly during local cleanup, delete Validation Runs first, then Validation Rules and SourceFiles, then Validation Profiles, and finally Datasets.
 
 Run the frontend on Unix-like systems:
 
@@ -504,7 +603,7 @@ The GitHub Actions workflow runs three independent jobs on pushes and pull reque
 ## Planned milestones
 
 - Milestone 2: complete, with PostgreSQL persistence and Dataset, Validation Profile, and Validation Rule REST vertical slices
-- Milestone 3: in progress, with the SourceFile upload foundation implemented and CSV parsing and the Validation Run lifecycle still planned
+- Milestone 3: in progress, with SourceFile upload and pending Validation Run creation implemented, while CSV parsing and processing transitions remain planned
 - Milestone 4: deterministic validation rules and issue persistence
 - Milestone 5: dataset, run, summary, and issue screens
 - Milestone 6: report export, structured logs, runtime metrics, and final documentation

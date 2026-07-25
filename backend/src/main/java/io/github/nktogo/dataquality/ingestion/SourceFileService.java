@@ -62,6 +62,12 @@ class SourceFileService {
     return toResponse(sourceFileRepository.save(sourceFile));
   }
 
+  UUID requireDatasetId(UUID fileId) {
+    return sourceFileRepository
+        .findDatasetIdById(fileId)
+        .orElseThrow(() -> new SourceFileNotFoundException(fileId));
+  }
+
   private void validateReportedSize(MultipartFile file) {
     if (file.isEmpty() || file.getSize() <= 0) {
       throw new InvalidSourceFileException("The uploaded file must not be empty.");

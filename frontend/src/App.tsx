@@ -32,8 +32,8 @@ function App() {
           <p>
             The React application shell, Spring Boot service, local PostgreSQL configuration, and
             automated checks are in place. PostgreSQL-backed Dataset, Validation Profile, Validation
-            Rule, and SourceFile upload APIs are available in the backend. The frontend shell does
-            not call these APIs yet.
+            Rule, SourceFile upload, and pending Validation Run creation APIs are available in the
+            backend. The frontend shell does not call these APIs yet.
           </p>
         </section>
 
