@@ -33,7 +33,9 @@ function App() {
             The React application shell, Spring Boot service, local PostgreSQL configuration, and
             automated checks are in place. PostgreSQL-backed Dataset, Validation Profile, Validation
             Rule, SourceFile upload, and pending Validation Run creation APIs are available in the
-            backend. The frontend shell does not call these APIs yet.
+            backend. A tested, isolated CSV parser foundation is also available, but it is not
+            connected to stored SourceFiles or Validation Run processing. The frontend shell does
+            not call these APIs yet.
           </p>
         </section>
 

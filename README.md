@@ -4,7 +4,7 @@ The Data Quality Platform is a learning and software-engineering project for bui
 
 ## Current status
 
-Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQL persistence foundation and the Dataset, Validation Profile, and Validation Rule persistence vertical slices. Milestone 3 is in progress with the SourceFile upload and Validation Run creation foundations:
+Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQL persistence foundation and the Dataset, Validation Profile, and Validation Rule persistence vertical slices. Milestone 3 is in progress with the SourceFile upload, Validation Run creation, and isolated CSV parser foundations:
 
 - a Java 21 and Spring Boot backend
 - a React and TypeScript frontend
@@ -21,13 +21,14 @@ Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQ
 - Validation Rule create and list REST endpoints nested under a Validation Profile
 - a Dataset-nested multipart CSV upload endpoint with a SHA-256 checksum
 - a SourceFile-nested endpoint that creates a pending Validation Run
+- an isolated, deterministic UTF-8 CSV parser with focused unit tests
 - PostgreSQL Testcontainers repository and API integration tests
 - backend and frontend tests and formatting checks
 - a GitHub Actions workflow for repository checks
 
 The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies the Dataset, Validation Profile, Validation Rule, SourceFile, and Validation Run migrations. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, Validation Rule, SourceFile upload, and Validation Run creation endpoints documented below. The frontend remains a static application shell.
 
-Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. A pending Validation Run can be created for a SourceFile and a Validation Profile from the same Dataset. CSV parsing, parser error handling, Validation Run processing transitions, rule execution, and rule-specific parameter validation are not implemented. Dataset, profile, rule, SourceFile, and Validation Run updates or deletion, profile, rule, SourceFile, and Validation Run detail retrieval, Validation Run listing, pagination, reports, authentication, and AI features are also not implemented yet.
+Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. A pending Validation Run can be created for a SourceFile and a Validation Profile from the same Dataset. An isolated CSV parser now defines and tests deterministic parsing behavior, but no endpoint or service reads stored SourceFile bytes for parsing yet. Parser error persistence, Validation Run processing transitions, rule execution, and rule-specific parameter validation are not implemented. Dataset, profile, rule, SourceFile, and Validation Run updates or deletion, profile, rule, SourceFile, and Validation Run detail retrieval, Validation Run listing, pagination, reports, authentication, and AI features are also not implemented yet.
 
 ## Repository layout
 
@@ -204,7 +205,7 @@ Available endpoint:
 
 The request must use `multipart/form-data` with one part named `file`. Files must be nonempty, no larger than the configured maximum, and have a basename of at most 255 characters ending in `.csv` case-insensitively. Submitted path components are removed before the filename is stored.
 
-The submitted MIME type is recorded as metadata, has a maximum length of 255 characters, and is not treated as proof that the content is valid CSV. Missing or blank MIME types are stored as `application/octet-stream`. Actual CSV parsing and semantic validation are deferred.
+The submitted MIME type is recorded as metadata, has a maximum length of 255 characters, and is not treated as proof that the content is valid CSV. Missing or blank MIME types are stored as `application/octet-stream`. Upload admission does not parse the content or perform semantic validation.
 
 A successful upload returns `201 Created` without a `Location` header because no SourceFile detail endpoint exists. The response contains only metadata:
 
@@ -256,6 +257,26 @@ $expectedHash
 ```
 
 No SourceFile list, detail, download, or deletion endpoint is implemented. Uploading a SourceFile does not parse it or automatically create a Validation Run.
+
+## CSV parser foundation
+
+The backend includes an isolated in-memory CSV parser with focused unit tests. It is not a Spring service and is not called by an API, SourceFile service, or Validation Run workflow yet. Stored SourceFile bytes remain private and are not read for processing. Validation Runs therefore remain `PENDING`, and parser failures are not persisted.
+
+The parser contract is:
+
+- input must be valid UTF-8 and may begin with one UTF-8 byte-order mark
+- comma is the fixed delimiter, comments and delimiter detection are not supported
+- LF, CRLF, and lone CR record separators are accepted
+- the first logical record is the required header, and a header-only file is valid
+- header names are preserved exactly, must not be blank, and must be unique with case-sensitive comparison
+- RFC-style quoted fields, doubled quotes, embedded commas, and embedded line endings are supported
+- field whitespace is preserved and empty fields are represented as empty strings
+- blank records are data records rather than ignored input
+- each data record must contain exactly the same number of fields as the header
+- empty or BOM-only input, invalid UTF-8, invalid headers, inconsistent field counts, and malformed quoting are rejected
+- logical record numbering is 1-based and includes the header, so the first data record is record 2
+
+The parser returns immutable ordered headers and rows. Embedded newlines inside a quoted field do not increment the logical record number. Parser behavior is intentionally isolated from persistence and Validation Rule execution in this commit.
 
 ## Validation Profile API
 
@@ -553,7 +574,7 @@ Run these commands from `backend/`. Replace `./mvnw` with `.\mvnw.cmd` on Window
 ./mvnw verify
 ```
 
-- `test` starts isolated PostgreSQL Testcontainers and runs the Spring Boot integration tests.
+- `test` runs focused unit tests and starts isolated PostgreSQL Testcontainers for the Spring Boot integration tests.
 - `package` runs tests and creates the executable JAR in `backend/target/`.
 - `spotless:check` verifies Java formatting.
 - `spotless:apply` formats Java source files.
@@ -603,7 +624,7 @@ The GitHub Actions workflow runs three independent jobs on pushes and pull reque
 ## Planned milestones
 
 - Milestone 2: complete, with PostgreSQL persistence and Dataset, Validation Profile, and Validation Rule REST vertical slices
-- Milestone 3: in progress, with SourceFile upload and pending Validation Run creation implemented, while CSV parsing and processing transitions remain planned
+- Milestone 3: in progress, with SourceFile upload, pending Validation Run creation, and the isolated CSV parser foundation implemented, while parser integration and processing transitions remain planned
 - Milestone 4: deterministic validation rules and issue persistence
 - Milestone 5: dataset, run, summary, and issue screens
 - Milestone 6: report export, structured logs, runtime metrics, and final documentation
