@@ -68,6 +68,16 @@ class SourceFileService {
         .orElseThrow(() -> new SourceFileNotFoundException(fileId));
   }
 
+  @Transactional(readOnly = true)
+  byte[] requireContentBytes(UUID fileId) {
+    byte[] contentBytes =
+        sourceFileRepository
+            .findContentBytesById(fileId)
+            .orElseThrow(() -> new SourceFileNotFoundException(fileId));
+
+    return contentBytes.clone();
+  }
+
   private void validateReportedSize(MultipartFile file) {
     if (file.isEmpty() || file.getSize() <= 0) {
       throw new InvalidSourceFileException("The uploaded file must not be empty.");

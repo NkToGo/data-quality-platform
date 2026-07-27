@@ -50,6 +50,10 @@ class SourceFileIntegrationTests {
   private static final byte[] CONTENT_BYTES = "abc".getBytes(StandardCharsets.UTF_8);
   private static final String CONTENT_SHA256 =
       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+  private static final byte[] UTF_8_BOM_CRLF_CONTENT =
+      withUtf8Bom("name,note\r\n1,\"first\r\nsecond\"\r\n");
+  private static final String UTF_8_BOM_CRLF_SHA256 =
+      "c4c2d66adf91f5bee76eda7b68e7d34d5935dbab816b7ed60298fc6926271a0d";
   private static final Instant UPLOADED_AT = Instant.parse("2026-07-25T12:34:56.123456Z");
 
   @Container @ServiceConnection
@@ -57,6 +61,8 @@ class SourceFileIntegrationTests {
       new PostgreSQLContainer("postgres:18.4-alpine");
 
   @Autowired private SourceFileRepository sourceFileRepository;
+
+  @Autowired private SourceFileService sourceFileService;
 
   @Autowired private JdbcTemplate jdbcTemplate;
 
@@ -126,6 +132,56 @@ class SourceFileIntegrationTests {
       assertThat(reloaded.getSha256()).isEqualTo(CONTENT_SHA256);
       assertThat(reloaded.getContentBytes()).containsExactly(CONTENT_BYTES);
       assertThat(reloaded.getUploadedAt()).isEqualTo(UPLOADED_AT);
+    }
+
+    @Test
+    void retrievesExactScalarContentBytesWithoutExposingMutablePersistenceState() {
+      UUID datasetId = insertDataset("Customer import");
+      SourceFile saved =
+          sourceFileRepository.saveAndFlush(
+              new SourceFile(
+                  datasetId,
+                  "customers.csv",
+                  "text/csv",
+                  UTF_8_BOM_CRLF_CONTENT.length,
+                  UTF_8_BOM_CRLF_SHA256,
+                  UTF_8_BOM_CRLF_CONTENT,
+                  UPLOADED_AT));
+
+      byte[] firstRead = sourceFileService.requireContentBytes(saved.getId());
+
+      assertThat(firstRead).containsExactly(UTF_8_BOM_CRLF_CONTENT);
+      assertThat(firstRead).isNotSameAs(UTF_8_BOM_CRLF_CONTENT);
+
+      firstRead[0] = 0;
+      byte[] secondRead = sourceFileService.requireContentBytes(saved.getId());
+
+      assertThat(secondRead).containsExactly(UTF_8_BOM_CRLF_CONTENT);
+      assertThat(secondRead).isNotSameAs(firstRead);
+      assertThat(
+              jdbcTemplate.queryForObject(
+                  "select content_bytes from source_file where id = ?",
+                  byte[].class,
+                  saved.getId()))
+          .containsExactly(UTF_8_BOM_CRLF_CONTENT);
+      assertThat(
+              jdbcTemplate.queryForObject(
+                  "select size_bytes from source_file where id = ?", Long.class, saved.getId()))
+          .isEqualTo((long) UTF_8_BOM_CRLF_CONTENT.length);
+      assertThat(
+              jdbcTemplate.queryForObject(
+                  "select sha256 from source_file where id = ?", String.class, saved.getId()))
+          .isEqualTo(UTF_8_BOM_CRLF_SHA256);
+    }
+
+    @Test
+    void contentLookupThrowsExistingNotFoundExceptionForUnknownSourceFile() {
+      UUID fileId = UUID.randomUUID();
+
+      assertThatThrownBy(() -> sourceFileService.requireContentBytes(fileId))
+          .isInstanceOf(SourceFileNotFoundException.class)
+          .hasMessage("Source file '" + fileId + "' was not found.");
+      assertThat(sourceFileRepository.count()).isZero();
     }
 
     @Test
@@ -617,6 +673,16 @@ class SourceFileIntegrationTests {
         null,
         Timestamp.from(Instant.parse("2026-07-25T12:00:00.123456Z")));
     return datasetId;
+  }
+
+  private static byte[] withUtf8Bom(String content) {
+    byte[] encodedContent = content.getBytes(StandardCharsets.UTF_8);
+    byte[] result = new byte[3 + encodedContent.length];
+    result[0] = (byte) 0xEF;
+    result[1] = (byte) 0xBB;
+    result[2] = (byte) 0xBF;
+    System.arraycopy(encodedContent, 0, result, 3, encodedContent.length);
+    return result;
   }
 
   private void insertSourceFile(

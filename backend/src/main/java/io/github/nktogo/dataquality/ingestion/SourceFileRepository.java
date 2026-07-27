@@ -10,4 +10,7 @@ interface SourceFileRepository extends JpaRepository<SourceFile, UUID> {
 
   @Query("select sourceFile.datasetId from SourceFile sourceFile where sourceFile.id = :fileId")
   Optional<UUID> findDatasetIdById(@Param("fileId") UUID fileId);
+
+  @Query("select sourceFile.contentBytes from SourceFile sourceFile where sourceFile.id = :fileId")
+  Optional<byte[]> findContentBytesById(@Param("fileId") UUID fileId);
 }

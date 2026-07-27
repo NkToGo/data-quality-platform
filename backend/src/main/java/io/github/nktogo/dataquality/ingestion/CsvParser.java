@@ -15,7 +15,9 @@ import java.util.Map;
 import java.util.Objects;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVRecord;
+import org.springframework.stereotype.Component;
 
+@Component
 final class CsvParser {
 
   private static final byte[] UTF_8_BOM = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};

@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.aMapWithSize;
 import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -15,13 +17,20 @@ import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.UUID;
+import java.util.stream.Stream;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -29,6 +38,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,9 +51,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @AutoConfigureMockMvc
 class ValidationRunIntegrationTests {
 
-  private static final byte[] CONTENT_BYTES = "abc".getBytes(StandardCharsets.UTF_8);
-  private static final String CONTENT_SHA256 =
-      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+  private static final byte[] CONTENT_BYTES =
+      "id,name\n1,Alice\n2,Bob".getBytes(StandardCharsets.UTF_8);
   private static final Instant CREATED_AT = Instant.parse("2026-07-25T12:00:00.123456Z");
   private static final Instant STARTED_AT = Instant.parse("2026-07-25T12:34:56.123456Z");
   private static final Instant FINISHED_AT = Instant.parse("2026-07-25T12:35:56.123456Z");
@@ -60,6 +69,8 @@ class ValidationRunIntegrationTests {
 
   @Autowired private MockMvc mockMvc;
 
+  @MockitoSpyBean private CsvParser csvParser;
+
   @PersistenceContext private EntityManager entityManager;
 
   @BeforeEach
@@ -75,8 +86,18 @@ class ValidationRunIntegrationTests {
   class RepositoryIntegration {
 
     @Test
-    void flywayAppliesValidationRunMigration() {
+    void flywayAppliesValidationRunMigrations() {
       assertThat(flyway.info().pending()).isEmpty();
+      assertThat(
+              jdbcTemplate.queryForObject(
+                  """
+                  select count(*)
+                  from flyway_schema_history
+                  where version = '6'
+                    and success
+                  """,
+                  Long.class))
+          .isEqualTo(1L);
       assertThat(
               jdbcTemplate.queryForObject(
                   "select to_regclass('public.validation_run')::text", String.class))
@@ -124,7 +145,11 @@ class ValidationRunIntegrationTests {
               "ck_validation_run_valid_rows_nonnegative",
               "ck_validation_run_invalid_rows_nonnegative",
               "ck_validation_run_issue_count_nonnegative",
-              "ck_validation_run_pending_state");
+              "ck_validation_run_pending_state",
+              "ck_validation_run_processing_state",
+              "ck_validation_run_failed_state",
+              "ck_validation_run_failure_reason_state",
+              "ck_validation_run_time_order");
     }
 
     @Test
@@ -160,21 +185,58 @@ class ValidationRunIntegrationTests {
       UUID fileId = insertSourceFile(datasetId, "customers.csv");
       UUID profileId = insertValidationProfile(datasetId, "Default validation");
 
-      for (ValidationRunStatus runStatus : ValidationRunStatus.values()) {
-        insertValidationRun(
-            UUID.randomUUID(),
-            datasetId,
-            fileId,
-            profileId,
-            runStatus.name(),
-            0L,
-            0L,
-            0L,
-            0L,
-            null,
-            null,
-            null);
-      }
+      insertValidationRun(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "PENDING",
+          0L,
+          0L,
+          0L,
+          0L,
+          null,
+          null,
+          null);
+      insertValidationRun(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "PROCESSING",
+          2L,
+          0L,
+          0L,
+          0L,
+          STARTED_AT,
+          null,
+          null);
+      insertValidationRun(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "COMPLETED",
+          2L,
+          2L,
+          0L,
+          0L,
+          STARTED_AT,
+          FINISHED_AT,
+          null);
+      insertValidationRun(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "FAILED",
+          0L,
+          0L,
+          0L,
+          0L,
+          STARTED_AT,
+          FINISHED_AT,
+          "CSV content is malformed.");
 
       assertThat(validationRunRepository.findAll())
           .extracting(ValidationRun::getStatus)
@@ -369,6 +431,184 @@ class ValidationRunIntegrationTests {
     }
 
     @Test
+    void databaseRejectsInvalidProcessingStateAndFailureReasonForCompletedState() {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId = insertSourceFile(datasetId, "customers.csv");
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+
+      assertRunInsertRejected(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "PROCESSING",
+          0L,
+          0L,
+          0L,
+          0L,
+          null,
+          null,
+          null);
+      assertRunInsertRejected(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "PROCESSING",
+          0L,
+          0L,
+          0L,
+          0L,
+          STARTED_AT,
+          FINISHED_AT,
+          null);
+      assertRunInsertRejected(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "PROCESSING",
+          0L,
+          0L,
+          0L,
+          0L,
+          STARTED_AT,
+          null,
+          "Parser failure");
+      assertRunInsertRejected(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "COMPLETED",
+          0L,
+          0L,
+          0L,
+          0L,
+          null,
+          FINISHED_AT,
+          null);
+      assertRunInsertRejected(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "COMPLETED",
+          0L,
+          0L,
+          0L,
+          0L,
+          STARTED_AT,
+          FINISHED_AT,
+          "Parser failure");
+    }
+
+    @Test
+    void databaseEnforcesFailedStateAndFailureReasonBoundaries() {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId = insertSourceFile(datasetId, "customers.csv");
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+
+      assertRunInsertRejected(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "FAILED",
+          0L,
+          0L,
+          0L,
+          0L,
+          null,
+          FINISHED_AT,
+          "Parser failure");
+      assertRunInsertRejected(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "FAILED",
+          0L,
+          0L,
+          0L,
+          0L,
+          STARTED_AT,
+          null,
+          "Parser failure");
+
+      for (String invalidReason : new String[] {null, "", "   ", "\t", "\n", "\r\n"}) {
+        assertRunInsertRejected(
+            UUID.randomUUID(),
+            datasetId,
+            fileId,
+            profileId,
+            "FAILED",
+            0L,
+            0L,
+            0L,
+            0L,
+            STARTED_AT,
+            FINISHED_AT,
+            invalidReason);
+      }
+      assertRunInsertRejected(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "FAILED",
+          0L,
+          0L,
+          0L,
+          0L,
+          STARTED_AT,
+          FINISHED_AT,
+          "x".repeat(256));
+
+      UUID acceptedRunId = UUID.randomUUID();
+      insertValidationRun(
+          acceptedRunId,
+          datasetId,
+          fileId,
+          profileId,
+          "FAILED",
+          0L,
+          0L,
+          0L,
+          0L,
+          STARTED_AT,
+          FINISHED_AT,
+          "x".repeat(255));
+      assertThat(
+              jdbcTemplate.queryForObject(
+                  "select char_length(failure_reason) from validation_run where id = ?",
+                  Integer.class,
+                  acceptedRunId))
+          .isEqualTo(255);
+    }
+
+    @Test
+    void databaseRejectsFinishedTimestampBeforeStartedTimestamp() {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId = insertSourceFile(datasetId, "customers.csv");
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+
+      assertRunInsertRejected(
+          UUID.randomUUID(),
+          datasetId,
+          fileId,
+          profileId,
+          "FAILED",
+          0L,
+          0L,
+          0L,
+          0L,
+          STARTED_AT,
+          STARTED_AT.minusSeconds(1),
+          "Parser failure");
+    }
+
+    @Test
     void databaseRejectsRequiredNulls() {
       UUID datasetId = insertDataset("Customer import");
       UUID fileId = insertSourceFile(datasetId, "customers.csv");
@@ -549,13 +789,11 @@ class ValidationRunIntegrationTests {
   class ApiIntegration {
 
     @Test
-    void createsPendingRunAndLeavesSourceFileBytesUnchanged() throws Exception {
+    void createsProcessingRunAndLeavesSourceFileBytesAndMetadataUnchanged() throws Exception {
       UUID datasetId = insertDataset("Customer import");
       UUID fileId = insertSourceFile(datasetId, "customers.csv");
       UUID profileId = insertValidationProfile(datasetId, "Default validation");
-      byte[] contentBefore =
-          jdbcTemplate.queryForObject(
-              "select content_bytes from source_file where id = ?", byte[].class, fileId);
+      SourceFileSnapshot sourceFileBefore = readSourceFile(fileId);
 
       MvcResult result =
           mockMvc
@@ -571,34 +809,208 @@ class ValidationRunIntegrationTests {
               .andExpect(jsonPath("$.datasetId").value(datasetId.toString()))
               .andExpect(jsonPath("$.sourceFileId").value(fileId.toString()))
               .andExpect(jsonPath("$.profileId").value(profileId.toString()))
-              .andExpect(jsonPath("$.status").value("PENDING"))
-              .andExpect(jsonPath("$.totalRows").value(0))
+              .andExpect(jsonPath("$.status").value("PROCESSING"))
+              .andExpect(jsonPath("$.totalRows").value(2))
               .andExpect(jsonPath("$.validRows").value(0))
               .andExpect(jsonPath("$.invalidRows").value(0))
               .andExpect(jsonPath("$.issueCount").value(0))
-              .andExpect(jsonPath("$.startedAt").value(nullValue()))
+              .andExpect(jsonPath("$.startedAt").isString())
+              .andExpect(jsonPath("$.finishedAt").value(nullValue()))
+              .andExpect(jsonPath("$.failureReason").value(nullValue()))
+              .andReturn();
+
+      String responseBody = result.getResponse().getContentAsString();
+      UUID runId = UUID.fromString(JsonPath.read(responseBody, "$.id"));
+      Instant responseStartedAt = Instant.parse(JsonPath.read(responseBody, "$.startedAt"));
+      ValidationRun persisted = validationRunRepository.findById(runId).orElseThrow();
+      assertThat(persisted.getDatasetId()).isEqualTo(datasetId);
+      assertThat(persisted.getSourceFileId()).isEqualTo(fileId);
+      assertThat(persisted.getProfileId()).isEqualTo(profileId);
+      assertThat(persisted.getStatus()).isEqualTo(ValidationRunStatus.PROCESSING);
+      assertThat(persisted.getTotalRows()).isEqualTo(2);
+      assertThat(persisted.getValidRows()).isZero();
+      assertThat(persisted.getInvalidRows()).isZero();
+      assertThat(persisted.getIssueCount()).isZero();
+      assertThat(persisted.getStartedAt()).isEqualTo(responseStartedAt);
+      assertThat(persisted.getStartedAt().getNano() % 1_000).isZero();
+      assertThat(persisted.getFinishedAt()).isNull();
+      assertThat(persisted.getFailureReason()).isNull();
+      assertSourceFileUnchanged(fileId, sourceFileBefore);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("successfulCsvCases")
+    void recordsExpectedTotalForSuccessfulCsvSemantics(
+        String description, byte[] contentBytes, int expectedTotalRows) throws Exception {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId = insertSourceFile(datasetId, "customers.csv", contentBytes);
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+      SourceFileSnapshot sourceFileBefore = readSourceFile(fileId);
+
+      MvcResult result =
+          mockMvc
+              .perform(
+                  post("/api/files/{fileId}/validation-runs", fileId)
+                      .contentType(APPLICATION_JSON)
+                      .content("{\"profileId\":\"" + profileId + "\"}"))
+              .andExpect(status().isCreated())
+              .andExpect(header().doesNotExist("Location"))
+              .andExpect(content().contentTypeCompatibleWith(APPLICATION_JSON))
+              .andExpect(jsonPath("$", aMapWithSize(12)))
+              .andExpect(jsonPath("$.status").value("PROCESSING"))
+              .andExpect(jsonPath("$.totalRows").value(expectedTotalRows))
+              .andExpect(jsonPath("$.validRows").value(0))
+              .andExpect(jsonPath("$.invalidRows").value(0))
+              .andExpect(jsonPath("$.issueCount").value(0))
+              .andExpect(jsonPath("$.startedAt").isString())
               .andExpect(jsonPath("$.finishedAt").value(nullValue()))
               .andExpect(jsonPath("$.failureReason").value(nullValue()))
               .andReturn();
 
       UUID runId =
           UUID.fromString(JsonPath.read(result.getResponse().getContentAsString(), "$.id"));
+      assertThat(validationRunRepository.findById(runId).orElseThrow())
+          .satisfies(
+              persisted -> {
+                assertThat(persisted.getStatus()).isEqualTo(ValidationRunStatus.PROCESSING);
+                assertThat(persisted.getTotalRows()).isEqualTo(expectedTotalRows);
+                assertThat(persisted.getStartedAt()).isNotNull();
+                assertThat(persisted.getStartedAt().getNano() % 1_000).isZero();
+                assertThat(persisted.getFinishedAt()).isNull();
+                assertThat(persisted.getFailureReason()).isNull();
+              });
+      assertSourceFileUnchanged(fileId, sourceFileBefore);
+    }
+
+    private static Stream<Arguments> successfulCsvCases() {
+      return Stream.of(
+          Arguments.of("header-only CSV", "value\r\n".getBytes(StandardCharsets.UTF_8), 0),
+          Arguments.of(
+              "UTF-8 BOM, CRLF, blank logical record, and multiline field",
+              withUtf8Bom("value\r\n\"first\r\ncontinued\"\r\n\r\nlast\r\n"),
+              3));
+    }
+
+    private static byte[] withUtf8Bom(String content) {
+      byte[] csvBytes = content.getBytes(StandardCharsets.UTF_8);
+      byte[] bytesWithBom = new byte[csvBytes.length + 3];
+      bytesWithBom[0] = (byte) 0xEF;
+      bytesWithBom[1] = (byte) 0xBB;
+      bytesWithBom[2] = (byte) 0xBF;
+      System.arraycopy(csvBytes, 0, bytesWithBom, 3, csvBytes.length);
+      return bytesWithBom;
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("parserFailureCases")
+    void createsFailedRunForExpectedParserErrors(
+        String description, byte[] contentBytes, String expectedFailureReason) throws Exception {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId = insertSourceFile(datasetId, "customers.csv", contentBytes);
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+      SourceFileSnapshot sourceFileBefore = readSourceFile(fileId);
+
+      MvcResult result =
+          mockMvc
+              .perform(
+                  post("/api/files/{fileId}/validation-runs", fileId)
+                      .contentType(APPLICATION_JSON)
+                      .content("{\"profileId\":\"" + profileId + "\"}"))
+              .andExpect(status().isCreated())
+              .andExpect(header().doesNotExist("Location"))
+              .andExpect(content().contentTypeCompatibleWith(APPLICATION_JSON))
+              .andExpect(jsonPath("$", aMapWithSize(12)))
+              .andExpect(jsonPath("$.id").isString())
+              .andExpect(jsonPath("$.datasetId").value(datasetId.toString()))
+              .andExpect(jsonPath("$.sourceFileId").value(fileId.toString()))
+              .andExpect(jsonPath("$.profileId").value(profileId.toString()))
+              .andExpect(jsonPath("$.status").value("FAILED"))
+              .andExpect(jsonPath("$.totalRows").value(0))
+              .andExpect(jsonPath("$.validRows").value(0))
+              .andExpect(jsonPath("$.invalidRows").value(0))
+              .andExpect(jsonPath("$.issueCount").value(0))
+              .andExpect(jsonPath("$.startedAt").isString())
+              .andExpect(jsonPath("$.finishedAt").isString())
+              .andExpect(jsonPath("$.failureReason").value(expectedFailureReason))
+              .andReturn();
+
+      String responseBody = result.getResponse().getContentAsString();
+      UUID runId = UUID.fromString(JsonPath.read(responseBody, "$.id"));
+      Instant responseStartedAt = Instant.parse(JsonPath.read(responseBody, "$.startedAt"));
+      Instant responseFinishedAt = Instant.parse(JsonPath.read(responseBody, "$.finishedAt"));
       ValidationRun persisted = validationRunRepository.findById(runId).orElseThrow();
-      assertThat(persisted.getDatasetId()).isEqualTo(datasetId);
-      assertThat(persisted.getSourceFileId()).isEqualTo(fileId);
-      assertThat(persisted.getProfileId()).isEqualTo(profileId);
-      assertThat(persisted.getStatus()).isEqualTo(ValidationRunStatus.PENDING);
+
+      assertThat(persisted.getStatus()).isEqualTo(ValidationRunStatus.FAILED);
       assertThat(persisted.getTotalRows()).isZero();
       assertThat(persisted.getValidRows()).isZero();
       assertThat(persisted.getInvalidRows()).isZero();
       assertThat(persisted.getIssueCount()).isZero();
-      assertThat(persisted.getStartedAt()).isNull();
-      assertThat(persisted.getFinishedAt()).isNull();
-      assertThat(persisted.getFailureReason()).isNull();
-      assertThat(
-              jdbcTemplate.queryForObject(
-                  "select content_bytes from source_file where id = ?", byte[].class, fileId))
-          .containsExactly(contentBefore);
+      assertThat(persisted.getStartedAt()).isEqualTo(responseStartedAt);
+      assertThat(persisted.getFinishedAt()).isEqualTo(responseFinishedAt);
+      assertThat(persisted.getStartedAt().getNano() % 1_000).isZero();
+      assertThat(persisted.getFinishedAt().getNano() % 1_000).isZero();
+      assertThat(persisted.getFinishedAt()).isAfterOrEqualTo(persisted.getStartedAt());
+      assertThat(persisted.getFailureReason()).isEqualTo(expectedFailureReason);
+      assertSourceFileUnchanged(fileId, sourceFileBefore);
+    }
+
+    private static Stream<Arguments> parserFailureCases() {
+      return Stream.of(
+          Arguments.of(
+              "invalid UTF-8",
+              new byte[] {(byte) 0xC3, (byte) 0x28},
+              "CSV content is not valid UTF-8."),
+          Arguments.of(
+              "blank header",
+              ",name\n1,Alice".getBytes(StandardCharsets.UTF_8),
+              "CSV header column 1 must have a name."),
+          Arguments.of(
+              "inconsistent field count",
+              "id,name\n1".getBytes(StandardCharsets.UTF_8),
+              "CSV record 2 has 1 fields; expected 2."),
+          Arguments.of(
+              "malformed quoting",
+              "id,note\n1,\"unterminated".getBytes(StandardCharsets.UTF_8),
+              "CSV content is malformed."));
+    }
+
+    @Test
+    void unexpectedParserExceptionLeavesCommittedRunPending() {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId = insertSourceFile(datasetId, "customers.csv");
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+      SourceFileSnapshot sourceFileBefore = readSourceFile(fileId);
+      String unexpectedMessage = "Unexpected parser failure.";
+      doThrow(new IllegalStateException(unexpectedMessage))
+          .when(csvParser)
+          .parse(any(byte[].class));
+
+      assertThatThrownBy(
+              () ->
+                  mockMvc.perform(
+                      post("/api/files/{fileId}/validation-runs", fileId)
+                          .contentType(APPLICATION_JSON)
+                          .content("{\"profileId\":\"" + profileId + "\"}")))
+          .hasRootCauseInstanceOf(IllegalStateException.class)
+          .hasRootCauseMessage(unexpectedMessage);
+
+      assertThat(validationRunRepository.findAll())
+          .singleElement()
+          .satisfies(
+              persisted -> {
+                assertThat(persisted.getDatasetId()).isEqualTo(datasetId);
+                assertThat(persisted.getSourceFileId()).isEqualTo(fileId);
+                assertThat(persisted.getProfileId()).isEqualTo(profileId);
+                assertThat(persisted.getStatus()).isEqualTo(ValidationRunStatus.PENDING);
+                assertThat(persisted.getTotalRows()).isZero();
+                assertThat(persisted.getValidRows()).isZero();
+                assertThat(persisted.getInvalidRows()).isZero();
+                assertThat(persisted.getIssueCount()).isZero();
+                assertThat(persisted.getStartedAt()).isNull();
+                assertThat(persisted.getFinishedAt()).isNull();
+                assertThat(persisted.getFailureReason()).isNull();
+              });
+      assertSourceFileUnchanged(fileId, sourceFileBefore);
     }
 
     @Test
@@ -607,6 +1019,7 @@ class ValidationRunIntegrationTests {
       UUID fileId = insertSourceFile(datasetId, "customers.csv");
       UUID profileId = insertValidationProfile(datasetId, "Default validation");
       String requestBody = "{\"profileId\":\"" + profileId + "\"}";
+      SourceFileSnapshot sourceFileBefore = readSourceFile(fileId);
 
       MvcResult first =
           mockMvc
@@ -628,7 +1041,63 @@ class ValidationRunIntegrationTests {
       String firstId = JsonPath.read(first.getResponse().getContentAsString(), "$.id");
       String secondId = JsonPath.read(second.getResponse().getContentAsString(), "$.id");
       assertThat(firstId).isNotEqualTo(secondId);
-      assertThat(validationRunRepository.count()).isEqualTo(2);
+      assertThat(validationRunRepository.findAll())
+          .hasSize(2)
+          .allSatisfy(
+              run -> {
+                assertThat(run.getStatus()).isEqualTo(ValidationRunStatus.PROCESSING);
+                assertThat(run.getTotalRows()).isEqualTo(2);
+                assertThat(run.getStartedAt()).isNotNull();
+                assertThat(run.getFinishedAt()).isNull();
+                assertThat(run.getFailureReason()).isNull();
+              });
+      assertSourceFileUnchanged(fileId, sourceFileBefore);
+    }
+
+    @Test
+    void permitsRepeatedFailedRunCreation() throws Exception {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId =
+          insertSourceFile(
+              datasetId, "customers.csv", "id,name\n1".getBytes(StandardCharsets.UTF_8));
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+      String requestBody = "{\"profileId\":\"" + profileId + "\"}";
+      SourceFileSnapshot sourceFileBefore = readSourceFile(fileId);
+
+      MvcResult first =
+          mockMvc
+              .perform(
+                  post("/api/files/{fileId}/validation-runs", fileId)
+                      .contentType(APPLICATION_JSON)
+                      .content(requestBody))
+              .andExpect(status().isCreated())
+              .andExpect(jsonPath("$.status").value("FAILED"))
+              .andReturn();
+      MvcResult second =
+          mockMvc
+              .perform(
+                  post("/api/files/{fileId}/validation-runs", fileId)
+                      .contentType(APPLICATION_JSON)
+                      .content(requestBody))
+              .andExpect(status().isCreated())
+              .andExpect(jsonPath("$.status").value("FAILED"))
+              .andReturn();
+
+      String firstId = JsonPath.read(first.getResponse().getContentAsString(), "$.id");
+      String secondId = JsonPath.read(second.getResponse().getContentAsString(), "$.id");
+      assertThat(firstId).isNotEqualTo(secondId);
+      assertThat(validationRunRepository.findAll())
+          .hasSize(2)
+          .allSatisfy(
+              run -> {
+                assertThat(run.getStatus()).isEqualTo(ValidationRunStatus.FAILED);
+                assertThat(run.getTotalRows()).isZero();
+                assertThat(run.getStartedAt()).isNotNull();
+                assertThat(run.getFinishedAt()).isNotNull();
+                assertThat(run.getFailureReason())
+                    .isEqualTo("CSV record 2 has 1 fields; expected 2.");
+              });
+      assertSourceFileUnchanged(fileId, sourceFileBefore);
     }
 
     @Test
@@ -786,6 +1255,10 @@ class ValidationRunIntegrationTests {
   }
 
   private UUID insertSourceFile(UUID datasetId, String filename) {
+    return insertSourceFile(datasetId, filename, CONTENT_BYTES);
+  }
+
+  private UUID insertSourceFile(UUID datasetId, String filename, byte[] contentBytes) {
     UUID fileId = UUID.randomUUID();
     jdbcTemplate.update(
         """
@@ -798,11 +1271,51 @@ class ValidationRunIntegrationTests {
         datasetId,
         filename,
         "text/csv",
-        CONTENT_BYTES.length,
-        CONTENT_SHA256,
-        CONTENT_BYTES,
+        contentBytes.length,
+        sha256(contentBytes),
+        contentBytes,
         Timestamp.from(CREATED_AT));
     return fileId;
+  }
+
+  private SourceFileSnapshot readSourceFile(UUID fileId) {
+    return jdbcTemplate.queryForObject(
+        """
+        select dataset_id, original_filename, content_type, size_bytes, sha256,
+               content_bytes, uploaded_at
+        from source_file
+        where id = ?
+        """,
+        (resultSet, rowNumber) ->
+            new SourceFileSnapshot(
+                resultSet.getObject("dataset_id", UUID.class),
+                resultSet.getString("original_filename"),
+                resultSet.getString("content_type"),
+                resultSet.getLong("size_bytes"),
+                resultSet.getString("sha256"),
+                resultSet.getBytes("content_bytes"),
+                resultSet.getTimestamp("uploaded_at").toInstant()),
+        fileId);
+  }
+
+  private void assertSourceFileUnchanged(UUID fileId, SourceFileSnapshot before) {
+    SourceFileSnapshot after = readSourceFile(fileId);
+
+    assertThat(after.datasetId()).isEqualTo(before.datasetId());
+    assertThat(after.originalFilename()).isEqualTo(before.originalFilename());
+    assertThat(after.contentType()).isEqualTo(before.contentType());
+    assertThat(after.sizeBytes()).isEqualTo(before.sizeBytes());
+    assertThat(after.sha256()).isEqualTo(before.sha256());
+    assertThat(after.contentBytes()).containsExactly(before.contentBytes());
+    assertThat(after.uploadedAt()).isEqualTo(before.uploadedAt());
+  }
+
+  private String sha256(byte[] contentBytes) {
+    try {
+      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(contentBytes));
+    } catch (NoSuchAlgorithmException exception) {
+      throw new IllegalStateException("SHA-256 is not available.", exception);
+    }
   }
 
   private UUID insertValidationProfile(UUID datasetId, String name) {
@@ -883,4 +1396,13 @@ class ValidationRunIntegrationTests {
                     failureReason))
         .isInstanceOf(DataIntegrityViolationException.class);
   }
+
+  private record SourceFileSnapshot(
+      UUID datasetId,
+      String originalFilename,
+      String contentType,
+      long sizeBytes,
+      String sha256,
+      byte[] contentBytes,
+      Instant uploadedAt) {}
 }

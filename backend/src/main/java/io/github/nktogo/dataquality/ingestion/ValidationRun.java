@@ -10,7 +10,9 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.UUID;
 
 @Entity
@@ -61,6 +63,7 @@ class ValidationRun {
   @Column(name = "finished_at")
   private Instant finishedAt;
 
+  @Size(max = 255)
   @Column(name = "failure_reason", columnDefinition = "text")
   private String failureReason;
 
@@ -82,6 +85,43 @@ class ValidationRun {
 
   static ValidationRun pending(UUID datasetId, UUID sourceFileId, UUID profileId) {
     return new ValidationRun(datasetId, sourceFileId, profileId);
+  }
+
+  void start(Instant startedAt) {
+    requireStatus(ValidationRunStatus.PENDING);
+    requireMicrosecondPrecision(startedAt, "startedAt");
+
+    this.status = ValidationRunStatus.PROCESSING;
+    this.startedAt = startedAt;
+  }
+
+  void recordParsedRowCount(long totalRows) {
+    requireStatus(ValidationRunStatus.PROCESSING);
+    if (totalRows < 0) {
+      throw new IllegalArgumentException("totalRows must not be negative.");
+    }
+
+    this.totalRows = totalRows;
+  }
+
+  void failParsing(Instant finishedAt, String failureReason) {
+    requireStatus(ValidationRunStatus.PROCESSING);
+    requireMicrosecondPrecision(finishedAt, "finishedAt");
+    if (finishedAt.isBefore(startedAt)) {
+      throw new IllegalArgumentException("finishedAt must not be before startedAt.");
+    }
+    if (failureReason == null || failureReason.isBlank() || failureReason.length() > 255) {
+      throw new IllegalArgumentException(
+          "failureReason must contain a non-whitespace character and not exceed 255 characters.");
+    }
+
+    this.status = ValidationRunStatus.FAILED;
+    this.totalRows = 0;
+    this.validRows = 0;
+    this.invalidRows = 0;
+    this.issueCount = 0;
+    this.finishedAt = finishedAt;
+    this.failureReason = failureReason;
   }
 
   UUID getId() {
@@ -130,5 +170,19 @@ class ValidationRun {
 
   String getFailureReason() {
     return failureReason;
+  }
+
+  private void requireStatus(ValidationRunStatus requiredStatus) {
+    if (status != requiredStatus) {
+      throw new IllegalStateException(
+          "Validation Run must be " + requiredStatus + " for this transition.");
+    }
+  }
+
+  private void requireMicrosecondPrecision(Instant timestamp, String fieldName) {
+    Objects.requireNonNull(timestamp, fieldName + " must not be null.");
+    if (timestamp.getNano() % 1_000 != 0) {
+      throw new IllegalArgumentException(fieldName + " must use microsecond precision.");
+    }
   }
 }
