@@ -3,10 +3,12 @@ package io.github.nktogo.dataquality.ingestion;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.aMapWithSize;
+import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -22,6 +24,7 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.flywaydb.core.Flyway;
@@ -30,6 +33,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -41,6 +45,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -241,6 +246,30 @@ class ValidationRunIntegrationTests {
       assertThat(validationRunRepository.findAll())
           .extracting(ValidationRun::getStatus)
           .containsExactlyInAnyOrder(ValidationRunStatus.values());
+    }
+
+    @Test
+    void ordersValidationRunsByPostgresqlUuidOrder() {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId = insertSourceFile(datasetId, "customers.csv");
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+      UUID firstId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+      UUID secondId = UUID.fromString("7fffffff-ffff-ffff-ffff-ffffffffffff");
+      UUID thirdId = UUID.fromString("80000000-0000-0000-0000-000000000000");
+      UUID fourthId = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
+
+      insertValidationRun(
+          fourthId, datasetId, fileId, profileId, "PENDING", 0L, 0L, 0L, 0L, null, null, null);
+      insertValidationRun(
+          secondId, datasetId, fileId, profileId, "PENDING", 0L, 0L, 0L, 0L, null, null, null);
+      insertValidationRun(
+          thirdId, datasetId, fileId, profileId, "PENDING", 0L, 0L, 0L, 0L, null, null, null);
+      insertValidationRun(
+          firstId, datasetId, fileId, profileId, "PENDING", 0L, 0L, 0L, 0L, null, null, null);
+
+      assertThat(validationRunRepository.findAllByOrderByIdAsc())
+          .extracting(ValidationRun::getId)
+          .containsExactly(firstId, secondId, thirdId, fourthId);
     }
 
     @Test
@@ -789,6 +818,121 @@ class ValidationRunIntegrationTests {
   class ApiIntegration {
 
     @Test
+    void listsNoValidationRunsAsEmptyArray() throws Exception {
+      mockMvc
+          .perform(get("/api/validation-runs"))
+          .andExpect(status().isOk())
+          .andExpect(content().contentTypeCompatibleWith(APPLICATION_JSON))
+          .andExpect(content().json("[]"));
+    }
+
+    @Test
+    void listsAllStatusesInPostgresqlUuidOrderWithExactResponses() throws Exception {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId = insertSourceFile(datasetId, "customers.csv");
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+      ValidationRunFixture pending =
+          insertValidationRunFixture(
+              UUID.fromString("00000000-0000-0000-0000-000000000001"),
+              datasetId,
+              fileId,
+              profileId,
+              ValidationRunStatus.PENDING);
+      ValidationRunFixture processing =
+          insertValidationRunFixture(
+              UUID.fromString("7fffffff-ffff-ffff-ffff-ffffffffffff"),
+              datasetId,
+              fileId,
+              profileId,
+              ValidationRunStatus.PROCESSING);
+      ValidationRunFixture failed =
+          insertValidationRunFixture(
+              UUID.fromString("80000000-0000-0000-0000-000000000000"),
+              datasetId,
+              fileId,
+              profileId,
+              ValidationRunStatus.FAILED);
+      ValidationRunFixture completed =
+          insertValidationRunFixture(
+              UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+              datasetId,
+              fileId,
+              profileId,
+              ValidationRunStatus.COMPLETED);
+
+      ResultActions response =
+          mockMvc
+              .perform(get("/api/validation-runs"))
+              .andExpect(status().isOk())
+              .andExpect(content().contentTypeCompatibleWith(APPLICATION_JSON))
+              .andExpect(jsonPath("$", hasSize(4)));
+
+      assertValidationRunResponse(response, "$[0]", pending);
+      assertValidationRunResponse(response, "$[1]", processing);
+      assertValidationRunResponse(response, "$[2]", failed);
+      assertValidationRunResponse(response, "$[3]", completed);
+    }
+
+    @ParameterizedTest
+    @EnumSource(ValidationRunStatus.class)
+    void retrievesValidationRunById(ValidationRunStatus runStatus) throws Exception {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId = insertSourceFile(datasetId, "customers.csv");
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+      ValidationRunFixture requested =
+          insertValidationRunFixture(UUID.randomUUID(), datasetId, fileId, profileId, runStatus);
+      insertValidationRunFixture(
+          UUID.randomUUID(), datasetId, fileId, profileId, ValidationRunStatus.PENDING);
+
+      ResultActions response =
+          mockMvc
+              .perform(get("/api/validation-runs/{runId}", requested.id()))
+              .andExpect(status().isOk())
+              .andExpect(content().contentTypeCompatibleWith(APPLICATION_JSON));
+
+      assertValidationRunResponse(response, "$", requested);
+    }
+
+    @Test
+    void returnsProblemDetailForUnknownValidationRun() throws Exception {
+      UUID runId = UUID.randomUUID();
+
+      mockMvc
+          .perform(get("/api/validation-runs/{runId}", runId))
+          .andExpect(status().isNotFound())
+          .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+          .andExpect(jsonPath("$", aMapWithSize(4)))
+          .andExpect(jsonPath("$.type").doesNotExist())
+          .andExpect(jsonPath("$.title").value("Validation Run not found"))
+          .andExpect(jsonPath("$.status").value(404))
+          .andExpect(jsonPath("$.detail").value("Validation Run '" + runId + "' was not found."))
+          .andExpect(jsonPath("$.instance").value("/api/validation-runs/" + runId));
+    }
+
+    @Test
+    void rejectsMalformedValidationRunId() throws Exception {
+      mockMvc.perform(get("/api/validation-runs/not-a-uuid")).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void retrievalDoesNotChangePersistedValidationRuns() throws Exception {
+      UUID datasetId = insertDataset("Customer import");
+      UUID fileId = insertSourceFile(datasetId, "customers.csv");
+      UUID profileId = insertValidationProfile(datasetId, "Default validation");
+      ValidationRunFixture pending =
+          insertValidationRunFixture(
+              UUID.randomUUID(), datasetId, fileId, profileId, ValidationRunStatus.PENDING);
+      insertValidationRunFixture(
+          UUID.randomUUID(), datasetId, fileId, profileId, ValidationRunStatus.FAILED);
+      List<ValidationRunSnapshot> before = readValidationRunSnapshots();
+
+      mockMvc.perform(get("/api/validation-runs")).andExpect(status().isOk());
+      mockMvc.perform(get("/api/validation-runs/{runId}", pending.id())).andExpect(status().isOk());
+
+      assertThat(readValidationRunSnapshots()).containsExactlyElementsOf(before);
+    }
+
+    @Test
     void createsProcessingRunAndLeavesSourceFileBytesAndMetadataUnchanged() throws Exception {
       UUID datasetId = insertDataset("Customer import");
       UUID fileId = insertSourceFile(datasetId, "customers.csv");
@@ -1231,6 +1375,39 @@ class ValidationRunIntegrationTests {
       assertThat(validationRunRepository.count()).isZero();
     }
 
+    private ResultActions assertValidationRunResponse(
+        ResultActions response, String path, ValidationRunFixture expected) throws Exception {
+      response
+          .andExpect(jsonPath(path, aMapWithSize(12)))
+          .andExpect(jsonPath(path + ".id").value(expected.id().toString()))
+          .andExpect(jsonPath(path + ".datasetId").value(expected.datasetId().toString()))
+          .andExpect(jsonPath(path + ".sourceFileId").value(expected.sourceFileId().toString()))
+          .andExpect(jsonPath(path + ".profileId").value(expected.profileId().toString()))
+          .andExpect(jsonPath(path + ".status").value(expected.status().name()))
+          .andExpect(jsonPath(path + ".totalRows").value(expected.totalRows()))
+          .andExpect(jsonPath(path + ".validRows").value(expected.validRows()))
+          .andExpect(jsonPath(path + ".invalidRows").value(expected.invalidRows()))
+          .andExpect(jsonPath(path + ".issueCount").value(expected.issueCount()));
+
+      if (expected.startedAt() == null) {
+        response.andExpect(jsonPath(path + ".startedAt").value(nullValue()));
+      } else {
+        response.andExpect(jsonPath(path + ".startedAt").value(expected.startedAt().toString()));
+      }
+      if (expected.finishedAt() == null) {
+        response.andExpect(jsonPath(path + ".finishedAt").value(nullValue()));
+      } else {
+        response.andExpect(jsonPath(path + ".finishedAt").value(expected.finishedAt().toString()));
+      }
+      if (expected.failureReason() == null) {
+        response.andExpect(jsonPath(path + ".failureReason").value(nullValue()));
+      } else {
+        response.andExpect(jsonPath(path + ".failureReason").value(expected.failureReason()));
+      }
+
+      return response;
+    }
+
     private void assertInvalidCreate(UUID fileId, String requestBody) throws Exception {
       mockMvc
           .perform(
@@ -1332,6 +1509,94 @@ class ValidationRunIntegrationTests {
     return profileId;
   }
 
+  private ValidationRunFixture insertValidationRunFixture(
+      UUID id, UUID datasetId, UUID sourceFileId, UUID profileId, ValidationRunStatus status) {
+    long totalRows = 0;
+    long validRows = 0;
+    long invalidRows = 0;
+    long issueCount = 0;
+    Instant startedAt = null;
+    Instant finishedAt = null;
+    String failureReason = null;
+
+    switch (status) {
+      case PENDING -> {}
+      case PROCESSING -> {
+        totalRows = 3;
+        startedAt = STARTED_AT;
+      }
+      case COMPLETED -> {
+        totalRows = 3;
+        validRows = 2;
+        invalidRows = 1;
+        issueCount = 1;
+        startedAt = STARTED_AT;
+        finishedAt = FINISHED_AT;
+      }
+      case FAILED -> {
+        startedAt = STARTED_AT;
+        finishedAt = FINISHED_AT;
+        failureReason = "CSV content is malformed.";
+      }
+    }
+
+    insertValidationRun(
+        id,
+        datasetId,
+        sourceFileId,
+        profileId,
+        status.name(),
+        totalRows,
+        validRows,
+        invalidRows,
+        issueCount,
+        startedAt,
+        finishedAt,
+        failureReason);
+
+    return new ValidationRunFixture(
+        id,
+        datasetId,
+        sourceFileId,
+        profileId,
+        status,
+        totalRows,
+        validRows,
+        invalidRows,
+        issueCount,
+        startedAt,
+        finishedAt,
+        failureReason);
+  }
+
+  private List<ValidationRunSnapshot> readValidationRunSnapshots() {
+    return jdbcTemplate.query(
+        """
+        select id, dataset_id, source_file_id, profile_id, status, total_rows, valid_rows,
+               invalid_rows, issue_count, started_at, finished_at, failure_reason
+        from validation_run
+        order by id
+        """,
+        (resultSet, rowNumber) -> {
+          Timestamp startedAt = resultSet.getTimestamp("started_at");
+          Timestamp finishedAt = resultSet.getTimestamp("finished_at");
+
+          return new ValidationRunSnapshot(
+              resultSet.getObject("id", UUID.class),
+              resultSet.getObject("dataset_id", UUID.class),
+              resultSet.getObject("source_file_id", UUID.class),
+              resultSet.getObject("profile_id", UUID.class),
+              ValidationRunStatus.valueOf(resultSet.getString("status")),
+              resultSet.getLong("total_rows"),
+              resultSet.getLong("valid_rows"),
+              resultSet.getLong("invalid_rows"),
+              resultSet.getLong("issue_count"),
+              startedAt == null ? null : startedAt.toInstant(),
+              finishedAt == null ? null : finishedAt.toInstant(),
+              resultSet.getString("failure_reason"));
+        });
+  }
+
   private void insertValidationRun(
       UUID id,
       UUID datasetId,
@@ -1405,4 +1670,32 @@ class ValidationRunIntegrationTests {
       String sha256,
       byte[] contentBytes,
       Instant uploadedAt) {}
+
+  private record ValidationRunFixture(
+      UUID id,
+      UUID datasetId,
+      UUID sourceFileId,
+      UUID profileId,
+      ValidationRunStatus status,
+      long totalRows,
+      long validRows,
+      long invalidRows,
+      long issueCount,
+      Instant startedAt,
+      Instant finishedAt,
+      String failureReason) {}
+
+  private record ValidationRunSnapshot(
+      UUID id,
+      UUID datasetId,
+      UUID sourceFileId,
+      UUID profileId,
+      ValidationRunStatus status,
+      long totalRows,
+      long validRows,
+      long invalidRows,
+      long issueCount,
+      Instant startedAt,
+      Instant finishedAt,
+      String failureReason) {}
 }

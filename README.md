@@ -21,14 +21,15 @@ Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQ
 - Validation Rule create and list REST endpoints nested under a Validation Profile
 - a Dataset-nested multipart CSV upload endpoint with a SHA-256 checksum
 - a SourceFile-nested endpoint that creates and synchronously parses a Validation Run
+- global Validation Run list and detail REST endpoints
 - deterministic UTF-8 CSV parsing with persisted processing and parser-failure states
 - PostgreSQL Testcontainers repository and API integration tests
 - backend and frontend tests and formatting checks
 - a GitHub Actions workflow for repository checks
 
-The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies the Dataset, Validation Profile, Validation Rule, SourceFile, and Validation Run migrations. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, Validation Rule, SourceFile upload, and Validation Run creation endpoints documented below. The frontend remains a static application shell.
+The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies the Dataset, Validation Profile, Validation Rule, SourceFile, and Validation Run migrations. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, Validation Rule, SourceFile upload, and Validation Run creation and retrieval endpoints documented below. The frontend remains a static application shell.
 
-Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. Creating a Validation Run for a SourceFile and a Validation Profile from the same Dataset now reads the private stored bytes and parses them synchronously. A successful parse leaves the Run in `PROCESSING` with its total data-row count, while a parser failure leaves it in `FAILED` with a safe failure reason. Validation Rule execution, completed Runs, and rule-specific parameter validation are not implemented. Dataset, profile, rule, SourceFile, and Validation Run updates or deletion, profile, rule, SourceFile, and Validation Run detail retrieval, Validation Run listing, pagination, reports, authentication, and AI features are also not implemented yet.
+Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. Creating a Validation Run for a SourceFile and a Validation Profile from the same Dataset now reads the private stored bytes and parses them synchronously. A successful parse leaves the Run in `PROCESSING` with its total data-row count, while a parser failure leaves it in `FAILED` with a safe failure reason. Validation Runs can be listed globally and retrieved by ID. Validation Rule execution, completed Runs, and rule-specific parameter validation are not implemented. Dataset, profile, rule, SourceFile, and Validation Run updates or deletion, profile, rule, and SourceFile detail retrieval, pagination, reports, authentication, and AI features are also not implemented yet.
 
 ## Repository layout
 
@@ -447,9 +448,11 @@ Invoke-RestMethod "http://localhost:8080/api/profiles/$($profile.id)/rules"
 
 A Validation Run belongs to one Dataset, one SourceFile, and one Validation Profile. The SourceFile and Validation Profile must belong to the same Dataset. The Dataset UUID is derived from the SourceFile and is not accepted from the client.
 
-Available endpoint:
+Available endpoints:
 
 - `POST /api/files/{fileId}/validation-runs`: create a Validation Run and synchronously parse its SourceFile
+- `GET /api/validation-runs`: list all persisted Validation Runs
+- `GET /api/validation-runs/{runId}`: retrieve one Validation Run
 
 The request must use `application/json` and contain only the Validation Profile UUID:
 
@@ -466,7 +469,7 @@ Content-Type: application/json
 
 The `profileId` value is required. A missing, null, or malformed value returns `400 Bad Request`.
 
-After validating the parent resources, the backend persists the new Run in `PENDING`, reads the private SourceFile bytes, and parses them synchronously. A successful parse returns `201 Created` without a `Location` header because a Validation Run detail endpoint is not implemented. The response contains exactly 12 fields:
+After validating the parent resources, the backend persists the new Run in `PENDING`, reads the private SourceFile bytes, and parses them synchronously. A successful parse returns `201 Created` without a `Location` header. The response contains exactly 12 fields:
 
 ```json
 {
@@ -534,7 +537,24 @@ If the SourceFile and Validation Profile belong to different Datasets, the reque
 }
 ```
 
-Failed requests do not persist a Validation Run.
+Request validation, unknown-parent, and cross-Dataset failures do not persist a Validation Run.
+
+The collection endpoint returns `200 OK` and the same 12-field representation for every persisted Run. It is global, unfiltered, and unpaged. Runs are ordered by PostgreSQL `id ASC`. This UUID order is deterministic, but it is not creation, start, finish, or execution order. An empty database returns `[]`.
+
+The detail endpoint returns `200 OK` and the same representation for the requested Run. Retrieval returns stored `PENDING`, `PROCESSING`, `COMPLETED`, and `FAILED` values without recalculating fields, advancing the lifecycle, or retrying processing. The current application does not create `COMPLETED` Runs yet, but a coherent persisted `COMPLETED` row can be retrieved.
+
+A valid but unknown Validation Run UUID returns `404 Not Found` with an `application/problem+json` response:
+
+```json
+{
+  "title": "Validation Run not found",
+  "status": 404,
+  "detail": "Validation Run '1d97a9a7-eb56-44da-a566-a9630f23cbcb' was not found.",
+  "instance": "/api/validation-runs/1d97a9a7-eb56-44da-a566-a9630f23cbcb"
+}
+```
+
+A malformed Validation Run UUID returns `400 Bad Request`.
 
 After uploading a SourceFile and creating a Validation Profile, create a Validation Run from a Unix-like shell:
 
@@ -547,6 +567,14 @@ curl --fail-with-body \
   --header 'Content-Type: application/json' \
   --data "{\"profileId\":\"$PROFILE_ID\"}" \
   "http://localhost:8080/api/files/$FILE_ID/validation-runs"
+
+curl --fail-with-body \
+  "http://localhost:8080/api/validation-runs"
+
+RUN_ID=REPLACE_WITH_VALIDATION_RUN_ID
+
+curl --fail-with-body \
+  "http://localhost:8080/api/validation-runs/$RUN_ID"
 ```
 
 Windows PowerShell, continuing from the SourceFile and Validation Profile examples:
@@ -559,9 +587,14 @@ $run = Invoke-RestMethod `
   -Body (@{ profileId = $profile.id } | ConvertTo-Json)
 
 $run
+
+$runs = Invoke-RestMethod http://localhost:8080/api/validation-runs
+$runs
+
+Invoke-RestMethod "http://localhost:8080/api/validation-runs/$($run.id)"
 ```
 
-No Validation Run list, detail, update, deletion, or retry endpoint is implemented. Run creation parses the CSV and counts its logical data records, but it does not execute Validation Rules, generate Validation Issues, calculate validation summaries, or transition the Run to `COMPLETED`.
+No Validation Run update, deletion, or retry endpoint is implemented. Run creation parses the CSV and counts its logical data records, but it does not execute Validation Rules, generate Validation Issues, calculate validation summaries, or transition the Run to `COMPLETED`.
 
 ## Persistence relationships
 
@@ -647,7 +680,7 @@ The GitHub Actions workflow runs three independent jobs on pushes and pull reque
 ## Planned milestones
 
 - Milestone 2: complete, with PostgreSQL persistence and Dataset, Validation Profile, and Validation Rule REST vertical slices
-- Milestone 3: in progress, with SourceFile upload, synchronous CSV parsing, and persisted `PROCESSING` and parser-failure lifecycle states implemented, while validation execution and completed Runs remain planned
+- Milestone 3: in progress, with SourceFile upload, synchronous CSV parsing, persisted `PROCESSING` and parser-failure lifecycle states, and Validation Run retrieval implemented, while validation execution and completed Runs remain planned
 - Milestone 4: deterministic validation rules and issue persistence
 - Milestone 5: dataset, run, summary, and issue screens
 - Milestone 6: report export, structured logs, runtime metrics, and final documentation
