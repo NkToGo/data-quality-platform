@@ -19,6 +19,7 @@
 
     <properties>
         <java.version>21</java.version>
+        <commons-csv.version>1.14.1</commons-csv.version>
         <spotless-maven-plugin.version>3.6.0</spotless-maven-plugin.version>
         <google-java-format.version>1.35.0</google-java-format.version>
     </properties>
@@ -39,6 +40,11 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>${commons-csv.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

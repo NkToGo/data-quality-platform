@@ -10,7 +10,7 @@ describe('App', () => {
       screen.getByRole('heading', { level: 1, name: 'Data Quality Platform' }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('These workflows are not available in Milestone 1.'),
+      screen.getByText('These workflows are not available in the frontend yet.'),
     ).toBeInTheDocument();
   });
 });

@@ -13,7 +13,7 @@ function App() {
 
       <header className="site-header">
         <div className="content-width">
-          <p className="milestone-label">Milestone 1</p>
+          <p className="milestone-label">Project status</p>
           <h1>Data Quality Platform</h1>
           <p className="intro">
             A foundation for building transparent, testable data-quality workflows in later
@@ -31,20 +31,23 @@ function App() {
           <h2 id="foundation-heading">Project foundation</h2>
           <p>
             The React application shell, Spring Boot service, local PostgreSQL configuration, and
-            automated checks are in place. PostgreSQL-backed Dataset, Validation Profile, and
-            Validation Rule APIs are available in the backend. The frontend shell does not call
-            these APIs yet.
+            automated checks are in place. PostgreSQL-backed Dataset, Validation Profile, Validation
+            Rule, SourceFile upload, and Validation Run creation, list, and detail APIs are
+            available in the backend. Creating a Validation Run parses its private stored CSV bytes
+            synchronously and records a PROCESSING or FAILED parser outcome. Validation Rule
+            execution and completed validation remain unavailable. The frontend shell does not call
+            these APIs or provide Validation Run screens yet.
           </p>
         </section>
 
         <section className="panel" aria-labelledby="planned-heading">
-          <h2 id="planned-heading">Planned for later milestones</h2>
+          <h2 id="planned-heading">Planned frontend capabilities</h2>
           <ul>
             {plannedCapabilities.map((capability) => (
               <li key={capability}>{capability}</li>
             ))}
           </ul>
-          <p className="planned-note">These workflows are not available in Milestone 1.</p>
+          <p className="planned-note">These workflows are not available in the frontend yet.</p>
         </section>
       </main>
 
