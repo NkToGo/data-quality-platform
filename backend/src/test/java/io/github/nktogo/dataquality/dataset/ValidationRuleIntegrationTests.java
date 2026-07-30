@@ -15,11 +15,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.jayway.jsonpath.JsonPath;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -93,20 +96,27 @@ class ValidationRuleIntegrationTests {
                   """,
                   String.class))
           .isEqualTo("jsonb");
+      assertThat(
+              jdbcTemplate.queryForList(
+                  """
+                  select conname
+                  from pg_constraint
+                  where conrelid = 'validation_rule'::regclass
+                  """,
+                  String.class))
+          .contains(
+              "ck_validation_rule_required_field_parameters",
+              "ck_validation_rule_uniqueness_parameters",
+              "ck_validation_rule_data_type_parameters",
+              "ck_validation_rule_numeric_range_parameters",
+              "ck_validation_rule_date_format_parameters");
     }
 
     @Test
     @Transactional
     void persistsAndReloadsEveryFieldAndProfileRelationship() {
       ValidationProfile profile = saveProfile("Default validation");
-      Map<String, Object> parameters =
-          Map.of(
-              "minimum",
-              1,
-              "maximum",
-              10,
-              "options",
-              Map.of("inclusive", true, "labels", List.of("low", "high")));
+      Map<String, Object> parameters = Map.of("minimum", 1, "maximum", 10);
 
       ValidationRule saved =
           validationRuleRepository.saveAndFlush(
@@ -138,7 +148,12 @@ class ValidationRuleIntegrationTests {
       for (ValidationRuleType ruleType : ValidationRuleType.values()) {
         validationRuleRepository.saveAndFlush(
             new ValidationRule(
-                profile, ruleType.name(), ruleType, Map.of(), ValidationRuleSeverity.ERROR, true));
+                profile,
+                ruleType.name(),
+                ruleType,
+                validParameters(ruleType),
+                ValidationRuleSeverity.ERROR,
+                true));
       }
       validationRuleRepository.saveAndFlush(
           new ValidationRule(
@@ -215,6 +230,89 @@ class ValidationRuleIntegrationTests {
     }
 
     @Test
+    void databaseRejectsInvalidRuleSpecificParameters() {
+      ValidationProfile profile = saveProfile("Default validation");
+
+      assertRuleInsertRejected(
+          UUID.randomUUID(),
+          profile.getId(),
+          "required",
+          "REQUIRED_FIELD",
+          "{\"unexpected\":true}",
+          "ERROR",
+          true);
+      assertRuleInsertRejected(
+          UUID.randomUUID(),
+          profile.getId(),
+          "unique",
+          "UNIQUENESS",
+          "{\"caseSensitive\":false}",
+          "ERROR",
+          true);
+      assertRuleInsertRejected(
+          UUID.randomUUID(),
+          profile.getId(),
+          "typed",
+          "DATA_TYPE",
+          "{\"type\":\"DATE\"}",
+          "ERROR",
+          true);
+      assertRuleInsertRejected(
+          UUID.randomUUID(),
+          profile.getId(),
+          "amount",
+          "NUMERIC_RANGE",
+          "{\"minimum\":10,\"maximum\":5}",
+          "ERROR",
+          true);
+      assertRuleInsertRejected(
+          UUID.randomUUID(),
+          profile.getId(),
+          "date",
+          "DATE_FORMAT",
+          "{\"format\":\"yyyy-MM-dd\"}",
+          "ERROR",
+          true);
+    }
+
+    @Test
+    void validVersionSixRuleConfigurationsAcceptVersionSevenMigration() {
+      String schema = newMigrationTestSchema();
+      try {
+        migrateSchemaToVersionSix(schema);
+        UUID profileId = insertMigrationTestProfile(schema);
+        for (ValidationRuleType ruleType : ValidationRuleType.values()) {
+          insertMigrationTestRule(schema, profileId, ruleType, validParametersJson(ruleType));
+        }
+
+        var result = flywayForSchema(schema).migrate();
+
+        assertThat(result.success).isTrue();
+        assertThat(result.migrationsExecuted).isEqualTo(1);
+        assertThat(flywayForSchema(schema).info().pending()).isEmpty();
+      } finally {
+        jdbcTemplate.execute("drop schema if exists " + schema + " cascade");
+      }
+    }
+
+    @Test
+    void invalidOpaqueVersionSixRuleBlocksVersionSevenMigration() {
+      String schema = newMigrationTestSchema();
+      try {
+        migrateSchemaToVersionSix(schema);
+        UUID profileId = insertMigrationTestProfile(schema);
+        insertMigrationTestRule(
+            schema, profileId, ValidationRuleType.DATA_TYPE, "{\"expected\":\"integer\"}");
+
+        assertThatThrownBy(() -> flywayForSchema(schema).migrate())
+            .isInstanceOf(FlywayException.class)
+            .hasMessageContaining("ck_validation_rule_data_type_parameters");
+      } finally {
+        jdbcTemplate.execute("drop schema if exists " + schema + " cascade");
+      }
+    }
+
+    @Test
     void databaseRejectsNullRequiredFields() {
       ValidationProfile profile = saveProfile("Default validation");
       UUID profileId = profile.getId();
@@ -274,7 +372,7 @@ class ValidationRuleIntegrationTests {
           selectedProfile.getId(),
           "second",
           "DATA_TYPE",
-          "{\"expected\":\"integer\"}",
+          "{\"type\":\"INTEGER\"}",
           "WARNING",
           false);
       insertRule(otherId, otherProfile.getId(), "other", "UNIQUENESS", "{}", "ERROR", true);
@@ -305,8 +403,7 @@ class ValidationRuleIntegrationTests {
                             "ruleType": "NUMERIC_RANGE",
                             "parameters": {
                               "minimum": 1,
-                              "maximum": 10,
-                              "options": {"inclusive": true}
+                              "maximum": 10
                             },
                             "severity": "WARNING",
                             "enabled": false
@@ -322,7 +419,6 @@ class ValidationRuleIntegrationTests {
               .andExpect(jsonPath("$.ruleType").value("NUMERIC_RANGE"))
               .andExpect(jsonPath("$.parameters.minimum").value(1))
               .andExpect(jsonPath("$.parameters.maximum").value(10))
-              .andExpect(jsonPath("$.parameters.options.inclusive").value(true))
               .andExpect(jsonPath("$.severity").value("WARNING"))
               .andExpect(jsonPath("$.enabled").value(false))
               .andReturn();
@@ -354,10 +450,7 @@ class ValidationRuleIntegrationTests {
                     .contentType(APPLICATION_JSON)
                     .content(
                         validRequest(
-                            ruleType.name(),
-                            "ERROR",
-                            true,
-                            "{\"type\":\"" + ruleType.name() + "\"}")))
+                            ruleType.name(), "ERROR", true, validParametersJson(ruleType))))
             .andExpect(status().isCreated())
             .andExpect(jsonPath("$.ruleType").value(ruleType.name()));
       }
@@ -372,6 +465,125 @@ class ValidationRuleIntegrationTests {
           .andExpect(jsonPath("$.enabled").value(false));
 
       assertThat(validationRuleRepository.count()).isEqualTo(6);
+    }
+
+    @Test
+    void acceptsNumericRangeVariants() throws Exception {
+      ValidationProfile profile = saveProfile("Default validation");
+
+      for (String parameters :
+          List.of(
+              "{\"minimum\":1}",
+              "{\"maximum\":10.5}",
+              "{\"minimum\":5,\"maximum\":5}",
+              "{\"minimum\":1e2,\"maximum\":2.5e2}")) {
+        mockMvc
+            .perform(
+                post("/api/profiles/{profileId}/rules", profile.getId())
+                    .contentType(APPLICATION_JSON)
+                    .content(validRequest("NUMERIC_RANGE", "ERROR", true, parameters)))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$", aMapWithSize(7)))
+            .andExpect(jsonPath("$.parameters").isMap());
+      }
+
+      assertThat(validationRuleRepository.count()).isEqualTo(4);
+    }
+
+    @Test
+    void preservesHighPrecisionNumericRangeThroughHttpAndPostgresql() throws Exception {
+      ValidationProfile profile = saveProfile("Default validation");
+      String exactDecimal = "0.123456789012345678901234567890123456789";
+
+      MvcResult result =
+          mockMvc
+              .perform(
+                  post("/api/profiles/{profileId}/rules", profile.getId())
+                      .contentType(APPLICATION_JSON)
+                      .content(
+                          validRequest(
+                              "NUMERIC_RANGE",
+                              "ERROR",
+                              true,
+                              "{\"minimum\":" + exactDecimal + "}")))
+              .andExpect(status().isCreated())
+              .andExpect(jsonPath("$", aMapWithSize(7)))
+              .andReturn();
+
+      String responseBody = result.getResponse().getContentAsString();
+      UUID ruleId = UUID.fromString(JsonPath.read(responseBody, "$.id"));
+      BigDecimal persistedMinimum =
+          jdbcTemplate.queryForObject(
+              """
+              select (parameters_json ->> 'minimum')::numeric
+              from validation_rule
+              where id = ?
+              """,
+              BigDecimal.class,
+              ruleId);
+
+      assertThat(persistedMinimum).isEqualByComparingTo(exactDecimal);
+      assertThat(responseBody).contains("\"minimum\":" + exactDecimal);
+    }
+
+    @Test
+    void rejectsInvalidRuleSpecificParametersWithProblemDetails() throws Exception {
+      ValidationProfile profile = saveProfile("Default validation");
+
+      assertInvalidRuleParameters(
+          profile.getId(),
+          "REQUIRED_FIELD",
+          "{\"unexpected\":true}",
+          "REQUIRED_FIELD contains unknown parameters: 'unexpected'.",
+          true);
+      assertInvalidRuleParameters(
+          profile.getId(),
+          "UNIQUENESS",
+          "{\"caseSensitive\":false}",
+          "UNIQUENESS contains unknown parameters: 'caseSensitive'.",
+          true);
+      assertInvalidRuleParameters(
+          profile.getId(), "DATA_TYPE", "{}", "DATA_TYPE requires parameter 'type'.", true);
+      assertInvalidRuleParameters(
+          profile.getId(),
+          "NUMERIC_RANGE",
+          "{\"minimum\":10,\"maximum\":5}",
+          "NUMERIC_RANGE parameter 'minimum' must be less than or equal to parameter 'maximum'.",
+          true);
+      assertInvalidRuleParameters(
+          profile.getId(),
+          "DATE_FORMAT",
+          "{\"format\":\"yyyy-MM-dd\"}",
+          "DATE_FORMAT parameter 'format' must be one of: "
+              + "ISO_DATE, DAY_MONTH_YEAR, MONTH_DAY_YEAR.",
+          false);
+
+      assertThat(validationRuleRepository.count()).isZero();
+    }
+
+    @Test
+    void sortsUnknownParameterNamesInProblemDetail() throws Exception {
+      ValidationProfile profile = saveProfile("Default validation");
+
+      assertInvalidRuleParameters(
+          profile.getId(),
+          "REQUIRED_FIELD",
+          "{\"z\":true,\"a\":false}",
+          "REQUIRED_FIELD contains unknown parameters: 'a', 'z'.",
+          true);
+    }
+
+    @Test
+    void hidesOversizedUnknownParameterNameInProblemDetail() throws Exception {
+      ValidationProfile profile = saveProfile("Default validation");
+      String oversizedKey = "a".repeat(65);
+
+      assertInvalidRuleParameters(
+          profile.getId(),
+          "REQUIRED_FIELD",
+          "{\"" + oversizedKey + "\":true}",
+          "REQUIRED_FIELD contains unknown parameters: '<unsupported>'.",
+          true);
     }
 
     @Test
@@ -446,7 +658,7 @@ class ValidationRuleIntegrationTests {
           mockMvc.perform(
               post("/api/profiles/{profileId}/rules", profileId)
                   .contentType(APPLICATION_JSON)
-                  .content(validRequest("REQUIRED_FIELD", "ERROR", true, "{}"))),
+                  .content(validRequest("REQUIRED_FIELD", "ERROR", true, "{\"unexpected\":true}"))),
           profileId);
       assertThat(validationRuleRepository.count()).isZero();
     }
@@ -474,7 +686,7 @@ class ValidationRuleIntegrationTests {
           selectedProfile.getId(),
           "second",
           "DATA_TYPE",
-          "{\"expected\":\"integer\"}",
+          "{\"type\":\"INTEGER\"}",
           "WARNING",
           false);
       insertRule(
@@ -505,7 +717,7 @@ class ValidationRuleIntegrationTests {
           .andExpect(jsonPath("$[1].profileId").value(selectedProfile.getId().toString()))
           .andExpect(jsonPath("$[1].fieldName").value("second"))
           .andExpect(jsonPath("$[1].ruleType").value("DATA_TYPE"))
-          .andExpect(jsonPath("$[1].parameters.expected").value("integer"))
+          .andExpect(jsonPath("$[1].parameters.type").value("INTEGER"))
           .andExpect(jsonPath("$[1].severity").value("WARNING"))
           .andExpect(jsonPath("$[1].enabled").value(false));
     }
@@ -536,6 +748,30 @@ class ValidationRuleIntegrationTests {
                   .contentType(APPLICATION_JSON)
                   .content(requestBody))
           .andExpect(status().isBadRequest());
+
+      assertThat(validationRuleRepository.count()).isZero();
+    }
+
+    private void assertInvalidRuleParameters(
+        UUID profileId,
+        String ruleType,
+        String parametersJson,
+        String expectedDetail,
+        boolean enabled)
+        throws Exception {
+      mockMvc
+          .perform(
+              post("/api/profiles/{profileId}/rules", profileId)
+                  .contentType(APPLICATION_JSON)
+                  .content(validRequest(ruleType, "ERROR", enabled, parametersJson)))
+          .andExpect(status().isBadRequest())
+          .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+          .andExpect(jsonPath("$", aMapWithSize(4)))
+          .andExpect(jsonPath("$.type").doesNotExist())
+          .andExpect(jsonPath("$.title").value("Invalid Validation Rule parameters"))
+          .andExpect(jsonPath("$.status").value(400))
+          .andExpect(jsonPath("$.detail").value(expectedDetail))
+          .andExpect(jsonPath("$.instance").value("/api/profiles/" + profileId + "/rules"));
 
       assertThat(validationRuleRepository.count()).isZero();
     }
@@ -614,6 +850,88 @@ class ValidationRuleIntegrationTests {
         }
         """
         .formatted(ruleType, parametersJson, renderedSeverity, enabled);
+  }
+
+  private Map<String, Object> validParameters(ValidationRuleType ruleType) {
+    return switch (ruleType) {
+      case REQUIRED_FIELD, UNIQUENESS -> Map.of();
+      case DATA_TYPE -> Map.of("type", "INTEGER");
+      case NUMERIC_RANGE -> Map.of("minimum", 0);
+      case DATE_FORMAT -> Map.of("format", "ISO_DATE");
+    };
+  }
+
+  private String validParametersJson(ValidationRuleType ruleType) {
+    return switch (ruleType) {
+      case REQUIRED_FIELD, UNIQUENESS -> "{}";
+      case DATA_TYPE -> "{\"type\":\"INTEGER\"}";
+      case NUMERIC_RANGE -> "{\"minimum\":0}";
+      case DATE_FORMAT -> "{\"format\":\"ISO_DATE\"}";
+    };
+  }
+
+  private String newMigrationTestSchema() {
+    return "validation_rule_upgrade_" + UUID.randomUUID().toString().replace("-", "");
+  }
+
+  private Flyway flywayForSchema(String schema) {
+    return Flyway.configure()
+        .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+        .defaultSchema(schema)
+        .schemas(schema)
+        .load();
+  }
+
+  private void migrateSchemaToVersionSix(String schema) {
+    Flyway versionSix =
+        Flyway.configure()
+            .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+            .defaultSchema(schema)
+            .schemas(schema)
+            .target("6")
+            .load();
+
+    assertThat(versionSix.migrate().success).isTrue();
+  }
+
+  private UUID insertMigrationTestProfile(String schema) {
+    UUID datasetId = UUID.randomUUID();
+    UUID profileId = UUID.randomUUID();
+    jdbcTemplate.update(
+        "insert into "
+            + schema
+            + ".dataset (id, name, description, created_at) values (?, ?, ?, ?)",
+        datasetId,
+        "Migration dataset",
+        null,
+        Timestamp.from(Instant.parse("2026-07-21T12:00:00.123456Z")));
+    jdbcTemplate.update(
+        "insert into "
+            + schema
+            + ".validation_profile (id, dataset_id, name, created_at) values (?, ?, ?, ?)",
+        profileId,
+        datasetId,
+        "Migration profile",
+        Timestamp.from(Instant.parse("2026-07-21T12:34:56.123456Z")));
+    return profileId;
+  }
+
+  private void insertMigrationTestRule(
+      String schema, UUID profileId, ValidationRuleType ruleType, String parametersJson) {
+    jdbcTemplate.update(
+        """
+        insert into %s.validation_rule
+          (id, profile_id, field_name, rule_type, parameters_json, severity, enabled)
+        values (?, ?, ?, ?, ?::jsonb, ?, ?)
+        """
+            .formatted(schema),
+        UUID.randomUUID(),
+        profileId,
+        ruleType.name(),
+        ruleType.name(),
+        parametersJson,
+        "ERROR",
+        true);
   }
 
   private void assertValidationProfileNotFound(
