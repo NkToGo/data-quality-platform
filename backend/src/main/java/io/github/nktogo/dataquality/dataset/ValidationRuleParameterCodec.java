@@ -10,6 +10,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.json.JsonMapper;
 
 @Component
 final class ValidationRuleParameterCodec {
@@ -25,6 +29,13 @@ final class ValidationRuleParameterCodec {
   private static final Set<String> NUMERIC_RANGE_PARAMETERS =
       Set.of(MINIMUM_PARAMETER, MAXIMUM_PARAMETER);
   private static final Set<String> DATE_FORMAT_PARAMETERS = Set.of(FORMAT_PARAMETER);
+  private static final TypeReference<Map<String, Object>> PARAMETERS_TYPE =
+      new TypeReference<>() {};
+  private static final JsonMapper PERSISTED_PARAMETERS_MAPPER =
+      JsonMapper.builder()
+          .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+          .enable(DeserializationFeature.USE_BIG_INTEGER_FOR_INTS)
+          .build();
 
   ValidationRuleConfiguration decode(ValidationRuleType ruleType, Map<String, Object> parameters) {
     Objects.requireNonNull(ruleType, "ruleType must not be null");
@@ -38,6 +49,18 @@ final class ValidationRuleParameterCodec {
       case NUMERIC_RANGE -> decodeNumericRange(parameters);
       case DATE_FORMAT -> decodeDateFormat(parameters);
     };
+  }
+
+  ValidationRuleConfiguration decodePersisted(ValidationRuleType ruleType, String parametersJson) {
+    Objects.requireNonNull(parametersJson, "parametersJson must not be null");
+
+    try {
+      return decode(
+          ruleType, PERSISTED_PARAMETERS_MAPPER.readValue(parametersJson, PARAMETERS_TYPE));
+    } catch (JacksonException exception) {
+      throw new IllegalStateException(
+          "Persisted Validation Rule parameters could not be decoded.", exception);
+    }
   }
 
   Map<String, Object> encode(

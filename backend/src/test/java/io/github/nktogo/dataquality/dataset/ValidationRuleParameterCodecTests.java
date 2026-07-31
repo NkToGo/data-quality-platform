@@ -150,6 +150,17 @@ class ValidationRuleParameterCodecTests {
       assertThat(configuration.minimum()).isEqualByComparingTo(configuration.maximum());
     }
 
+    @Test
+    void decodesPersistedJsonNumbersWithoutLosingPrecision() {
+      String minimum = "0.123456789012345678901234567890123456789";
+      ValidationRuleConfiguration.NumericRange configuration =
+          (ValidationRuleConfiguration.NumericRange)
+              codec.decodePersisted(
+                  ValidationRuleType.NUMERIC_RANGE, "{\"minimum\":" + minimum + "}");
+
+      assertThat(configuration.minimum()).isEqualByComparingTo(minimum);
+    }
+
     @ParameterizedTest
     @MethodSource(
         "io.github.nktogo.dataquality.dataset.ValidationRuleParameterCodecTests#jsonNumbers")

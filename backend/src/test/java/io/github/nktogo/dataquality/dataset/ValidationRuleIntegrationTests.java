@@ -55,6 +55,8 @@ class ValidationRuleIntegrationTests {
 
   @Autowired private ValidationRuleRepository validationRuleRepository;
 
+  @Autowired private ValidationRuleAccess validationRuleAccess;
+
   @Autowired private JdbcTemplate jdbcTemplate;
 
   @Autowired private Flyway flyway;
@@ -381,6 +383,111 @@ class ValidationRuleIntegrationTests {
       assertThat(validationRuleRepository.findAllByProfileOrderByIdAsc(selectedProfile))
           .extracting(ValidationRule::getId)
           .containsExactly(firstId, secondId);
+    }
+  }
+
+  @Nested
+  class ExecutableRuleAccessIntegration {
+
+    @Test
+    void loadsOnlyEnabledRulesAsTypedDefinitionsInPostgresqlUuidOrder() {
+      ValidationProfile selectedProfile = saveProfile("Selected profile");
+      ValidationProfile otherProfile = saveProfile("Other profile");
+      UUID requiredId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+      UUID dataTypeId = UUID.fromString("7fffffff-ffff-ffff-ffff-ffffffffffff");
+      UUID disabledId = UUID.fromString("80000000-0000-0000-0000-000000000000");
+      UUID uniquenessId = UUID.fromString("80000000-0000-0000-0000-000000000001");
+      UUID numericRangeId = UUID.fromString("ffffffff-ffff-ffff-ffff-fffffffffff0");
+      UUID dateFormatId = UUID.fromString("ffffffff-ffff-ffff-ffff-fffffffffff1");
+      String minimum = "0.123456789012345678901234567890123456789";
+      String maximum = "999999999999999999999999999999999999999.0000000000000000001";
+
+      insertRule(
+          requiredId, selectedProfile.getId(), "required", "REQUIRED_FIELD", "{}", "ERROR", true);
+      insertRule(
+          dataTypeId,
+          selectedProfile.getId(),
+          "typed",
+          "DATA_TYPE",
+          "{\"type\":\"DECIMAL\"}",
+          "WARNING",
+          true);
+      insertRule(
+          disabledId, selectedProfile.getId(), "disabled", "REQUIRED_FIELD", "{}", "ERROR", false);
+      insertRule(
+          uniquenessId, selectedProfile.getId(), "unique", "UNIQUENESS", "{}", "ERROR", true);
+      insertRule(
+          numericRangeId,
+          selectedProfile.getId(),
+          "amount",
+          "NUMERIC_RANGE",
+          "{\"minimum\":" + minimum + ",\"maximum\":" + maximum + "}",
+          "WARNING",
+          true);
+      insertRule(
+          dateFormatId,
+          selectedProfile.getId(),
+          "date",
+          "DATE_FORMAT",
+          "{\"format\":\"DAY_MONTH_YEAR\"}",
+          "ERROR",
+          true);
+      insertRule(
+          UUID.fromString("00000000-0000-0000-0000-000000000002"),
+          otherProfile.getId(),
+          "other",
+          "REQUIRED_FIELD",
+          "{}",
+          "ERROR",
+          true);
+
+      List<ExecutableValidationRule> rules =
+          validationRuleAccess.getEnabledRules(selectedProfile.getId());
+
+      assertThat(rules)
+          .extracting(ExecutableValidationRule::id)
+          .containsExactly(requiredId, dataTypeId, uniquenessId, numericRangeId, dateFormatId);
+      assertThat(rules)
+          .extracting(ExecutableValidationRule::fieldName)
+          .containsExactly("required", "typed", "unique", "amount", "date");
+      assertThat(rules)
+          .extracting(ExecutableValidationRule::ruleType)
+          .containsExactly(
+              ValidationRuleType.REQUIRED_FIELD,
+              ValidationRuleType.DATA_TYPE,
+              ValidationRuleType.UNIQUENESS,
+              ValidationRuleType.NUMERIC_RANGE,
+              ValidationRuleType.DATE_FORMAT);
+      assertThat(rules)
+          .extracting(ExecutableValidationRule::severity)
+          .containsExactly(
+              ValidationRuleSeverity.ERROR,
+              ValidationRuleSeverity.WARNING,
+              ValidationRuleSeverity.ERROR,
+              ValidationRuleSeverity.WARNING,
+              ValidationRuleSeverity.ERROR);
+      assertThat(rules.get(0).configuration()).isEqualTo(new ValidationRuleConfiguration.Empty());
+      assertThat(rules.get(1).configuration())
+          .isEqualTo(new ValidationRuleConfiguration.DataType(ValidationDataType.DECIMAL));
+      assertThat(rules.get(2).configuration()).isEqualTo(new ValidationRuleConfiguration.Empty());
+      ValidationRuleConfiguration.NumericRange numericRange =
+          (ValidationRuleConfiguration.NumericRange) rules.get(3).configuration();
+      assertThat(numericRange.minimum()).isEqualByComparingTo(minimum);
+      assertThat(numericRange.maximum()).isEqualByComparingTo(maximum);
+      assertThat(rules.get(4).configuration())
+          .isEqualTo(
+              new ValidationRuleConfiguration.DateFormat(ValidationDateFormat.DAY_MONTH_YEAR));
+      assertThatThrownBy(() -> rules.add(rules.get(0)))
+          .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void rejectsUnknownProfileWhenLoadingEnabledRules() {
+      UUID profileId = UUID.randomUUID();
+
+      assertThatThrownBy(() -> validationRuleAccess.getEnabledRules(profileId))
+          .isInstanceOf(ValidationProfileNotFoundException.class)
+          .hasMessage("Validation Profile '" + profileId + "' was not found.");
     }
   }
 
