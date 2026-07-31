@@ -6,7 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-class ValidationRunService {
+class ValidationRunService implements ValidationRunAccess {
 
   private final ValidationRunLifecycleService validationRunLifecycleService;
   private final ValidationRunRepository validationRunRepository;
@@ -32,9 +32,18 @@ class ValidationRunService {
 
   @Transactional(readOnly = true)
   ValidationRunResponse getById(UUID runId) {
+    return toResponse(requireExisting(runId));
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public void requireValidationRun(UUID runId) {
+    requireExisting(runId);
+  }
+
+  private ValidationRun requireExisting(UUID runId) {
     return validationRunRepository
         .findById(runId)
-        .map(ValidationRunService::toResponse)
         .orElseThrow(() -> new ValidationRunNotFoundException(runId));
   }
 

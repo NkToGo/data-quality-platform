@@ -287,11 +287,11 @@ class ValidationRuleIntegrationTests {
           insertMigrationTestRule(schema, profileId, ruleType, validParametersJson(ruleType));
         }
 
-        var result = flywayForSchema(schema).migrate();
+        var result = flywayForVersionSevenSchema(schema).migrate();
 
         assertThat(result.success).isTrue();
         assertThat(result.migrationsExecuted).isEqualTo(1);
-        assertThat(flywayForSchema(schema).info().pending()).isEmpty();
+        assertThat(flywayForVersionSevenSchema(schema).info().pending()).isEmpty();
       } finally {
         jdbcTemplate.execute("drop schema if exists " + schema + " cascade");
       }
@@ -306,7 +306,7 @@ class ValidationRuleIntegrationTests {
         insertMigrationTestRule(
             schema, profileId, ValidationRuleType.DATA_TYPE, "{\"expected\":\"integer\"}");
 
-        assertThatThrownBy(() -> flywayForSchema(schema).migrate())
+        assertThatThrownBy(() -> flywayForVersionSevenSchema(schema).migrate())
             .isInstanceOf(FlywayException.class)
             .hasMessageContaining("ck_validation_rule_data_type_parameters");
       } finally {
@@ -981,11 +981,12 @@ class ValidationRuleIntegrationTests {
     return "validation_rule_upgrade_" + UUID.randomUUID().toString().replace("-", "");
   }
 
-  private Flyway flywayForSchema(String schema) {
+  private Flyway flywayForVersionSevenSchema(String schema) {
     return Flyway.configure()
         .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
         .defaultSchema(schema)
         .schemas(schema)
+        .target("7")
         .load();
   }
 
