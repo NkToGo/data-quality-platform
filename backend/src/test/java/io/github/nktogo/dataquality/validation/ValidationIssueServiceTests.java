@@ -2,12 +2,11 @@ package io.github.nktogo.dataquality.validation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -27,11 +26,13 @@ class ValidationIssueServiceTests {
   private final ValidationRunAccess validationRunAccess = mock(ValidationRunAccess.class);
   private final ValidationIssueRepository validationIssueRepository =
       mock(ValidationIssueRepository.class);
+  private final ValidationIssueWriter validationIssueWriter = mock(ValidationIssueWriter.class);
   private final ValidationIssueService validationIssueService =
-      new ValidationIssueService(validationRunAccess, validationIssueRepository);
+      new ValidationIssueService(
+          validationRunAccess, validationIssueRepository, validationIssueWriter);
 
   @Test
-  void requiresTheRunBeforePersistingDraftsInSuppliedOrder() {
+  void requiresTheRunBeforeDelegatingDraftsInSuppliedOrder() {
     UUID runId = UUID.randomUUID();
     List<ValidationIssueDraft> drafts =
         List.of(
@@ -53,38 +54,12 @@ class ValidationIssueServiceTests {
     validationIssueService.persistAll(runId, drafts);
 
     @SuppressWarnings("unchecked")
-    ArgumentCaptor<List<ValidationIssue>> issuesCaptor =
-        ArgumentCaptor.forClass((Class<List<ValidationIssue>>) (Class<?>) List.class);
-    InOrder calls = inOrder(validationRunAccess, validationIssueRepository);
+    ArgumentCaptor<List<ValidationIssueDraft>> draftsCaptor =
+        ArgumentCaptor.forClass((Class<List<ValidationIssueDraft>>) (Class<?>) List.class);
+    InOrder calls = inOrder(validationRunAccess, validationIssueWriter);
     calls.verify(validationRunAccess).requireValidationRun(runId);
-    calls.verify(validationIssueRepository).saveAll(issuesCaptor.capture());
-
-    assertThat(issuesCaptor.getValue())
-        .extracting(
-            ValidationIssue::getRunId,
-            ValidationIssue::getRowNumber,
-            ValidationIssue::getFieldName,
-            ValidationIssue::getRuleType,
-            ValidationIssue::getSeverity,
-            ValidationIssue::getMessage,
-            ValidationIssue::getObservedValue)
-        .containsExactly(
-            org.assertj.core.groups.Tuple.tuple(
-                runId,
-                4L,
-                "second",
-                ValidationRuleType.DATA_TYPE,
-                ValidationRuleSeverity.WARNING,
-                "Value must match type INTEGER.",
-                "not-an-integer"),
-            org.assertj.core.groups.Tuple.tuple(
-                runId,
-                2L,
-                "first",
-                ValidationRuleType.REQUIRED_FIELD,
-                ValidationRuleSeverity.ERROR,
-                "Value is required.",
-                ""));
+    calls.verify(validationIssueWriter).persistForExistingRun(eq(runId), draftsCaptor.capture());
+    assertThat(draftsCaptor.getValue()).containsExactlyElementsOf(drafts);
   }
 
   @Test
@@ -105,17 +80,16 @@ class ValidationIssueServiceTests {
     validationIssueService.persistAll(runId, drafts);
 
     @SuppressWarnings("unchecked")
-    ArgumentCaptor<List<ValidationIssue>> issuesCaptor =
-        ArgumentCaptor.forClass((Class<List<ValidationIssue>>) (Class<?>) List.class);
-    verify(validationIssueRepository).saveAll(issuesCaptor.capture());
-
-    assertThat(issuesCaptor.getValue())
-        .extracting(ValidationIssue::getObservedValue)
+    ArgumentCaptor<List<ValidationIssueDraft>> draftsCaptor =
+        ArgumentCaptor.forClass((Class<List<ValidationIssueDraft>>) (Class<?>) List.class);
+    verify(validationIssueWriter).persistForExistingRun(eq(runId), draftsCaptor.capture());
+    assertThat(draftsCaptor.getValue())
+        .extracting(ValidationIssueDraft::observedValue)
         .containsExactly("", " \t ", "Grüße 東京");
   }
 
   @Test
-  void defensivelyCopiesTheDraftListBeforeRepositoryInteraction() {
+  void defensivelyCopiesTheDraftListBeforeCheckingTheRun() {
     UUID runId = UUID.randomUUID();
     List<ValidationIssueDraft> drafts =
         new ArrayList<>(
@@ -138,10 +112,10 @@ class ValidationIssueServiceTests {
     validationIssueService.persistAll(runId, drafts);
 
     @SuppressWarnings("unchecked")
-    ArgumentCaptor<List<ValidationIssue>> issuesCaptor =
-        ArgumentCaptor.forClass((Class<List<ValidationIssue>>) (Class<?>) List.class);
-    verify(validationIssueRepository).saveAll(issuesCaptor.capture());
-    assertThat(issuesCaptor.getValue()).hasSize(1);
+    ArgumentCaptor<List<ValidationIssueDraft>> draftsCaptor =
+        ArgumentCaptor.forClass((Class<List<ValidationIssueDraft>>) (Class<?>) List.class);
+    verify(validationIssueWriter).persistForExistingRun(eq(runId), draftsCaptor.capture());
+    assertThat(draftsCaptor.getValue()).hasSize(1);
   }
 
   @Test
@@ -163,21 +137,23 @@ class ValidationIssueServiceTests {
                             ""))))
         .isSameAs(notFound);
 
-    verifyNoInteractions(validationIssueRepository);
+    verifyNoInteractions(validationIssueRepository, validationIssueWriter);
   }
 
   @Test
-  void anEmptyBatchStillRequiresTheRunAndWritesNoIssues() {
+  void anEmptyBatchStillRequiresTheRunAndDelegatesNoIssues() {
     UUID runId = UUID.randomUUID();
 
     validationIssueService.persistAll(runId, List.of());
 
-    verify(validationRunAccess).requireValidationRun(runId);
-    verify(validationIssueRepository, never()).saveAll(anyList());
+    InOrder calls = inOrder(validationRunAccess, validationIssueWriter);
+    calls.verify(validationRunAccess).requireValidationRun(runId);
+    calls.verify(validationIssueWriter).persistForExistingRun(runId, List.of());
+    verifyNoInteractions(validationIssueRepository);
   }
 
   @Test
-  void rejectsInvalidArgumentsBeforeCrossingEitherBoundary() {
+  void rejectsInvalidArgumentsBeforeCrossingAnyBoundary() {
     UUID runId = UUID.randomUUID();
     List<ValidationIssueDraft> withNull = new ArrayList<>();
     withNull.add(null);
@@ -189,7 +165,7 @@ class ValidationIssueServiceTests {
     assertThatThrownBy(() -> validationIssueService.persistAll(runId, withNull))
         .isInstanceOf(NullPointerException.class);
 
-    verifyNoInteractions(validationRunAccess, validationIssueRepository);
+    verifyNoInteractions(validationRunAccess, validationIssueRepository, validationIssueWriter);
   }
 
   @Test

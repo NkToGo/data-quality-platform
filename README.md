@@ -4,7 +4,7 @@ The Data Quality Platform is a learning and software-engineering project for bui
 
 ## Current status
 
-Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQL persistence foundation and the Dataset, Validation Profile, and Validation Rule persistence vertical slices. Milestone 3 is complete with SourceFile upload, deterministic CSV parsing, Validation Run creation and parser lifecycle persistence, and Validation Run retrieval. Milestone 4 is in progress with deterministic rule-specific parameter validation, an isolated deterministic validation engine, and Validation Issue persistence and retrieval:
+Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQL persistence foundation and the Dataset, Validation Profile, and Validation Rule persistence vertical slices. Milestone 3 is complete with SourceFile upload, deterministic CSV parsing, Validation Run creation and parser lifecycle persistence, and Validation Run retrieval. Milestone 4 is in progress with deterministic rule-specific parameter validation, end-to-end Validation Rule execution, Validation Issue persistence and retrieval, and completed Validation Run summaries:
 
 - a Java 21 and Spring Boot backend
 - a React and TypeScript frontend
@@ -20,19 +20,19 @@ Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQ
 - Dataset create, list, and detail REST endpoints
 - Validation Profile create and list REST endpoints nested under a Dataset
 - Validation Rule create and list REST endpoints nested under a Validation Profile, with semantic parameter validation on creation
-- an isolated in-memory validation engine for deterministic execution of enabled Validation Rules
+- a deterministic in-memory validation engine integrated into synchronous Validation Run processing
 - a Dataset-nested multipart CSV upload endpoint with a SHA-256 checksum
-- a SourceFile-nested endpoint that creates and synchronously parses a Validation Run
+- a SourceFile-nested endpoint that creates, parses, validates, and completes a Validation Run
 - global Validation Run list and detail REST endpoints
 - a read-only endpoint that lists a Validation Run's persisted Issues
-- deterministic UTF-8 CSV parsing with persisted processing and parser-failure states
+- deterministic UTF-8 CSV parsing with persisted parser and validation outcomes
 - PostgreSQL Testcontainers repository and API integration tests
 - backend and frontend tests and formatting checks
 - a GitHub Actions workflow for repository checks
 
-The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies migrations V1 through V8 for Dataset, Validation Profile, Validation Rule, rule-specific parameter constraints, SourceFile, Validation Run, Validation Run lifecycle constraints, and Validation Issue persistence. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, Validation Rule, SourceFile upload, Validation Run, and Validation Issue retrieval endpoints documented below. The frontend remains a static application shell.
+The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies migrations V1 through V9 for Dataset, Validation Profile, Validation Rule, rule-specific parameter constraints, SourceFile, Validation Run, Validation Run lifecycle and completed-summary constraints, and Validation Issue persistence. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, Validation Rule, SourceFile upload, Validation Run, and Validation Issue retrieval endpoints documented below. The frontend remains a static application shell.
 
-Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile, and every Rule's parameters are validated against its type-specific contract before persistence. Enabled Rules can also be loaded as immutable typed definitions and evaluated by an isolated in-memory engine. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. Creating a Validation Run for a SourceFile and a Validation Profile from the same Dataset now reads the private stored bytes and parses them synchronously. A successful parse leaves the Run in `PROCESSING` with its total data-row count, while a parser failure leaves it in `FAILED` with a safe failure reason. Validation Runs can be listed globally and retrieved by ID. Validation Issues can be persisted through an internal backend service and retrieved for an existing Run. The validation engine is not connected to Validation Run processing yet, so Run creation does not generate Issues. Validation-derived `validRows`, `invalidRows`, and `issueCount` calculation on Runs and successful transition to `COMPLETED` remain unimplemented Milestone 4 work. Issue filtering remains planned for Milestone 5, and report generation remains planned for Milestone 6. Dataset, profile, rule, SourceFile, and Validation Run updates or deletion, profile, rule, and SourceFile detail retrieval, pagination, authentication, and AI features are also not implemented yet.
+Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile, and every Rule's parameters are validated against its type-specific contract before persistence. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. Creating a Validation Run for a SourceFile and a Validation Profile from the same Dataset reads the private stored bytes, parses them, loads the Profile's enabled Rules, and validates the parsed rows synchronously. Successful validation atomically persists generated Issues and the `totalRows`, `validRows`, `invalidRows`, and `issueCount` summary before completing the Run. Expected parser failures, missing required headers, and recovered validation-processing failures persist safe `FAILED` outcomes without partial Issues. Unexpected SourceFile-access or parser runtime failures retain the separately committed `PENDING` Run for diagnosis. Validation Runs can be listed globally and retrieved by ID, and their persisted Issues can be retrieved through a read-only endpoint. Milestone 4 remains in progress pending its completion audit. Issue filtering remains planned for Milestone 5, and report generation remains planned for Milestone 6. Dataset, profile, rule, SourceFile, and Validation Run updates or deletion, profile, rule, and SourceFile detail retrieval, pagination, authentication, and AI features are also not implemented yet.
 
 ## Repository layout
 
@@ -280,7 +280,7 @@ The parser contract is:
 - empty or BOM-only input, invalid UTF-8, invalid headers, inconsistent field counts, and malformed quoting are rejected
 - logical record numbering is 1-based and includes the header, so the first data record is record 2
 
-The parser returns immutable ordered headers and rows. Embedded newlines inside a quoted field do not increment the logical record number. A successful parse persists the number of logical data records, excluding the header, and leaves the Run in `PROCESSING` for later Validation Rule execution. A parser failure is persisted as `FAILED` with the stable parser message and a finished timestamp.
+The parser returns immutable ordered headers and rows. Embedded newlines inside a quoted field do not increment the logical record number. A successful parse records the number of logical data records, excluding the header, and supplies the immutable parsed data to synchronous Validation Rule execution. An expected parser failure is persisted as `FAILED` with the stable parser message and a finished timestamp. An unexpected SourceFile-access or parser runtime failure rolls back the processing transaction and leaves the separately committed Run in `PENDING`.
 
 ## Validation Profile API
 
@@ -406,13 +406,13 @@ Numeric bounds are normalized by their structural numeric value rather than pres
 
 Arbitrary Java date patterns are not accepted. Duplicate or overlapping Rules remain allowed.
 
-### Deterministic validation engine foundation
+### Deterministic validation engine
 
-The backend includes an isolated in-memory engine for all five supported Rule types. A narrow read boundary supplies only enabled Rules in PostgreSQL UUID `id ASC` order, and the engine evaluates those immutable definitions against immutable ordered headers and logical CSV rows. Field-to-header matching is exact and case-sensitive, with whitespace preserved. A missing configured header produces the safe result `CSV header does not contain a field required by the Validation Profile.` without partial Issues.
+The backend uses an in-memory engine for all five supported Rule types during synchronous Validation Run processing. A narrow read boundary supplies only enabled Rules in PostgreSQL UUID `id ASC` order, and the engine evaluates those immutable definitions against immutable ordered headers and logical CSV rows. Field-to-header matching is exact and case-sensitive, with whitespace preserved. A missing configured header produces a persisted `FAILED` Run with the safe reason `CSV header does not contain a field required by the Validation Profile.`, the parsed `totalRows`, zero validation counters, and no Issues.
 
 `REQUIRED_FIELD` reports empty and whitespace-only values. Other Rule types skip blank values. Integer checks use arbitrary-precision integers, decimal and numeric-range checks are locale-independent, Boolean checks accept only lowercase `true` and `false`, date checks use the three strict controlled formats, and uniqueness compares exact nonblank values. In-memory Issues are ordered by Rule and then logical row.
 
-The engine summary counts every `ERROR` and `WARNING` Issue. A row is invalid when it has at least one `ERROR`; a row with only warnings remains valid, and multiple errors on one row increase the invalid-row count only once. The engine is not connected to stored SourceFiles or Validation Run processing in this slice. It does not persist Issues, update Run counters, or transition Runs to `COMPLETED`.
+The engine summary counts every `ERROR` and `WARNING` Issue. A row is invalid when it has at least one `ERROR`; a row with only warnings remains valid, and multiple errors on one row increase the invalid-row count only once. On success, generated Issues, all four summary counters, the `COMPLETED` status, and `finishedAt` are committed atomically. No enabled Rules means every parsed row is valid, and a header-only CSV with all required headers completes with all counters set to zero.
 
 A semantically invalid parameter object returns `400 Bad Request` with `application/problem+json` and creates no Rule:
 
@@ -490,7 +490,7 @@ A Validation Run belongs to one Dataset, one SourceFile, and one Validation Prof
 
 Available endpoints:
 
-- `POST /api/files/{fileId}/validation-runs`: create a Validation Run and synchronously parse its SourceFile
+- `POST /api/files/{fileId}/validation-runs`: create a Validation Run and synchronously parse and validate its SourceFile
 - `GET /api/validation-runs`: list all persisted Validation Runs
 - `GET /api/validation-runs/{runId}`: retrieve one Validation Run
 
@@ -509,7 +509,7 @@ Content-Type: application/json
 
 The `profileId` value is required. A missing, null, or malformed value returns `400 Bad Request`.
 
-After validating the parent resources, the backend persists the new Run in `PENDING`, reads the private SourceFile bytes, and parses them synchronously. A successful parse returns `201 Created` without a `Location` header. The response contains exactly 12 fields:
+After validating the parent resources, the backend separately commits the new Run in `PENDING`, then reads the private SourceFile bytes, parses them, and executes the Profile's enabled Rules synchronously. Successful validation returns `201 Created` without a `Location` header. The response contains exactly 12 fields:
 
 ```json
 {
@@ -517,18 +517,20 @@ After validating the parent resources, the backend persists the new Run in `PEND
   "datasetId": "47d9bea4-1130-4b9b-8fb3-ea23893d51e5",
   "sourceFileId": "54985ec5-103b-4d2b-95f3-0b57e2d74336",
   "profileId": "6dc81327-2a6b-46c9-9a09-43a64f989ac2",
-  "status": "PROCESSING",
-  "totalRows": 1,
-  "validRows": 0,
-  "invalidRows": 0,
-  "issueCount": 0,
+  "status": "COMPLETED",
+  "totalRows": 2,
+  "validRows": 1,
+  "invalidRows": 1,
+  "issueCount": 2,
   "startedAt": "2026-07-26T12:34:56.123456Z",
-  "finishedAt": null,
+  "finishedAt": "2026-07-26T12:34:56.234567Z",
   "failureReason": null
 }
 ```
 
-`totalRows` counts parsed logical data records and excludes the header. A header-only file is valid and produces `totalRows: 0`. The validation counters remain zero because the isolated validation engine is not connected to Validation Run processing yet. The successful Run remains `PROCESSING`, with `startedAt` set and `finishedAt` and `failureReason` left as `null`.
+`totalRows` counts parsed logical data records and excludes the header. `issueCount` counts every persisted `ERROR` and `WARNING` Issue. `invalidRows` counts distinct rows with at least one `ERROR`, while warning-only rows remain valid, and `validRows` equals `totalRows - invalidRows`. Multiple Issues on one row all increase `issueCount`, but multiple errors increase `invalidRows` only once. No enabled Rules means every parsed row is valid. A header-only file with all required headers completes with all counters set to zero.
+
+Successful validation persists every generated Issue, the exact summary, `COMPLETED`, and `finishedAt` in one transaction. `failureReason` remains `null`, and `issueCount` equals the number of persisted Issues for that Run.
 
 Malformed CSV is a persisted processing outcome rather than an invalid run-creation request. The endpoint still returns `201 Created`, but the response records the parser failure:
 
@@ -549,9 +551,19 @@ Malformed CSV is a persisted processing outcome rather than an invalid run-creat
 }
 ```
 
-Failed parsing returns no partial row count. The failure reason uses a stable, application-owned parser message and does not expose CSV field values, library exception text, or a stack trace. Persisted failure reasons must contain at least one non-whitespace character and have a maximum length of 255 characters. Unexpected non-parser failures are not mislabeled as CSV failures and may leave the already persisted Run in `PENDING` for diagnosis.
+Failed parsing returns no partial row count. The failure reason uses a stable, application-owned parser message and does not expose CSV field values, library exception text, or a stack trace. Persisted failure reasons must contain at least one non-whitespace character and have a maximum length of 255 characters.
 
-The defined lifecycle statuses are `PENDING`, `PROCESSING`, `COMPLETED`, and `FAILED`. This slice uses `PENDING`, `PROCESSING`, and `FAILED`. Multiple Runs for the same SourceFile and Validation Profile are allowed, receive independent UUIDs, and parse the stored bytes independently.
+If an enabled Rule references a field that is absent from the exact CSV header, the endpoint returns `201 Created` with a persisted `FAILED` Run. The Run preserves its parsed `totalRows`, keeps `validRows`, `invalidRows`, and `issueCount` at zero, persists no Issues, and uses this failure reason:
+
+```text
+CSV header does not contain a field required by the Validation Profile.
+```
+
+An unexpected failure after parsing during Rule loading, validation, Issue persistence, summary application, or completion rolls back all partial validation work. A separate recovery transaction restores the original `startedAt` and parsed `totalRows`, then persists a `FAILED` Run with zero validation counters, no Issues, and the generic reason `Validation processing failed.` The endpoint returns that recovered Run with `201 Created`. If recovery itself cannot commit, the request returns a server error and the Run remains durably `PENDING`.
+
+Unexpected SourceFile-access and parser runtime failures remain distinct from validation failures. They roll back the processing transaction, return a server error, and leave the separately committed Run in `PENDING` with no partial Issues or summary. They are not relabeled as parser or validation failures.
+
+The defined lifecycle statuses are `PENDING`, `PROCESSING`, `COMPLETED`, and `FAILED`. `PENDING` and `PROCESSING` are intermediate states, while successful validation persists `COMPLETED` and expected or recovered processing failures persist `FAILED`. Multiple Runs for the same SourceFile and Validation Profile are allowed, receive independent UUIDs, and process the stored bytes with isolated validation state.
 
 A valid but unknown SourceFile UUID returns `404 Not Found` with an `application/problem+json` response:
 
@@ -581,7 +593,7 @@ Request validation, unknown-parent, and cross-Dataset failures do not persist a 
 
 The collection endpoint returns `200 OK` and the same 12-field representation for every persisted Run. It is global, unfiltered, and unpaged. Runs are ordered by PostgreSQL `id ASC`. This UUID order is deterministic, but it is not creation, start, finish, or execution order. An empty database returns `[]`.
 
-The detail endpoint returns `200 OK` and the same representation for the requested Run. Retrieval returns stored `PENDING`, `PROCESSING`, `COMPLETED`, and `FAILED` values without recalculating fields, advancing the lifecycle, or retrying processing. The current application does not create `COMPLETED` Runs yet, but a coherent persisted `COMPLETED` row can be retrieved.
+The detail endpoint returns `200 OK` and the same representation for the requested Run. Retrieval returns stored `PENDING`, `PROCESSING`, `COMPLETED`, and `FAILED` values without recalculating fields, advancing the lifecycle, or retrying processing. Completed summaries are returned through the existing `totalRows`, `validRows`, `invalidRows`, and `issueCount` fields.
 
 A valid but unknown Validation Run UUID returns `404 Not Found` with an `application/problem+json` response:
 
@@ -615,6 +627,9 @@ RUN_ID=REPLACE_WITH_VALIDATION_RUN_ID
 
 curl --fail-with-body \
   "http://localhost:8080/api/validation-runs/$RUN_ID"
+
+curl --fail-with-body \
+  "http://localhost:8080/api/validation-runs/$RUN_ID/issues"
 ```
 
 Windows PowerShell, continuing from the SourceFile and Validation Profile examples:
@@ -632,13 +647,15 @@ $runs = Invoke-RestMethod http://localhost:8080/api/validation-runs
 $runs
 
 Invoke-RestMethod "http://localhost:8080/api/validation-runs/$($run.id)"
+
+Invoke-RestMethod "http://localhost:8080/api/validation-runs/$($run.id)/issues"
 ```
 
-No Validation Run update, deletion, or retry endpoint is implemented. Run creation parses the CSV and counts its logical data records, but it does not invoke the isolated validation engine, automatically generate or persist Validation Issues, calculate validation summaries on the Run, or transition the Run to `COMPLETED`.
+No Validation Run update, deletion, retry, or separate summary endpoint is implemented. Run creation performs the synchronous parse-and-validate workflow and returns the completed summary through the existing Run representation.
 
 ## Validation Issue API
 
-A Validation Issue belongs to one Validation Run. Issues contain a generated UUID, the parent Run UUID, a logical CSV row number, a field name, a Rule type, a severity, a message, and an optional observed value. The backend provides internal Issue persistence for later Validation Run processing, but it does not expose a public Issue creation endpoint.
+A Validation Issue belongs to one Validation Run. Issues contain a generated UUID, the parent Run UUID, a logical CSV row number, a field name, a Rule type, a severity, a message, and an optional observed value. Successful Validation Run processing persists generated Issues internally, but the backend does not expose a public Issue creation endpoint.
 
 Available endpoint:
 
@@ -663,7 +680,9 @@ The endpoint returns `200 OK` and an array containing exactly the persisted Issu
 
 `observedValue` may be `null`, an empty string, a whitespace-only string, or a normal string. Its exact persisted value is returned without trimming or normalization.
 
-Issues are ordered by `rowNumber` ascending, `fieldName` ascending, `ruleType` ascending, and PostgreSQL UUID `id` ascending. This retrieval order is independent from the isolated validation engine's Rule-major execution order. An existing Run without persisted Issues returns `[]`. Persisted Issues are returned for `PENDING`, `PROCESSING`, `COMPLETED`, and `FAILED` Runs without interpreting the Run status.
+Generated Issues and the completed Run summary commit atomically. For a `COMPLETED` Run, `issueCount` equals the number of persisted Issues. Parser failures, missing-header failures, and recovered validation-processing failures persist no partial Issues.
+
+Issues are ordered by `rowNumber` ascending, `fieldName` ascending, `ruleType` ascending, and PostgreSQL UUID `id` ascending. This retrieval order is independent from the validation engine's Rule-major execution order. An existing Run without persisted Issues returns `[]`. Persisted Issues are returned for `PENDING`, `PROCESSING`, `COMPLETED`, and `FAILED` Runs without interpreting the Run status.
 
 A valid but unknown Run UUID returns the existing `Validation Run not found` `404 Not Found` Problem Details response with the Issue collection path as its `instance`. A malformed Run UUID returns `400 Bad Request`.
 
@@ -754,7 +773,7 @@ The GitHub Actions workflow runs three independent jobs on pushes and pull reque
 
 - Milestone 2: complete, with PostgreSQL persistence and Dataset, Validation Profile, and Validation Rule REST vertical slices
 - Milestone 3: complete, with SourceFile upload, exact byte storage and SHA-256 checksums, synchronous CSV parsing, persisted `PROCESSING` and parser-failure lifecycle states, and Validation Run retrieval
-- Milestone 4: in progress, with deterministic rule-specific parameter validation, an isolated deterministic validation engine, and Validation Issue persistence and read-only retrieval implemented; Run-integrated Rule execution, validation-derived counters and summaries on Runs, and successful transition to `COMPLETED` remain planned, so successfully parsed Runs still remain `PROCESSING`
+- Milestone 4: in progress pending its completion audit, with deterministic rule-specific parameter validation, synchronous Rule execution, Validation Issue persistence and retrieval, validation-derived Run summaries, and successful transition to `COMPLETED` implemented
 - Milestone 5: dataset, run, summary, and issue screens
 - Milestone 6: report export, structured logs, runtime metrics, and final documentation
 

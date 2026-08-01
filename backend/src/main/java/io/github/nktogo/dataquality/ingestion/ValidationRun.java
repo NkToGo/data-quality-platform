@@ -1,5 +1,6 @@
 package io.github.nktogo.dataquality.ingestion;
 
+import io.github.nktogo.dataquality.validation.ValidationSummary;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -18,6 +19,8 @@ import java.util.UUID;
 @Entity
 @Table(name = "validation_run")
 class ValidationRun {
+
+  private static final int MAXIMUM_FAILURE_REASON_LENGTH = 255;
 
   @Id
   @GeneratedValue(strategy = GenerationType.UUID)
@@ -106,17 +109,46 @@ class ValidationRun {
 
   void failParsing(Instant finishedAt, String failureReason) {
     requireStatus(ValidationRunStatus.PROCESSING);
-    requireMicrosecondPrecision(finishedAt, "finishedAt");
-    if (finishedAt.isBefore(startedAt)) {
-      throw new IllegalArgumentException("finishedAt must not be before startedAt.");
-    }
-    if (failureReason == null || failureReason.isBlank() || failureReason.length() > 255) {
-      throw new IllegalArgumentException(
-          "failureReason must contain a non-whitespace character and not exceed 255 characters.");
-    }
+    requireFinishedAt(finishedAt);
+    requireFailureReason(failureReason);
 
     this.status = ValidationRunStatus.FAILED;
     this.totalRows = 0;
+    this.validRows = 0;
+    this.invalidRows = 0;
+    this.issueCount = 0;
+    this.finishedAt = finishedAt;
+    this.failureReason = failureReason;
+  }
+
+  void complete(ValidationSummary summary, Instant finishedAt) {
+    requireStatus(ValidationRunStatus.PROCESSING);
+    Objects.requireNonNull(summary, "summary must not be null.");
+    requireFinishedAt(finishedAt);
+    if (summary.totalRows() != totalRows) {
+      throw new IllegalArgumentException(
+          "Validation summary totalRows must equal the parsed totalRows.");
+    }
+    if (summary.issueCount() < summary.invalidRows()) {
+      throw new IllegalArgumentException(
+          "Validation summary issueCount must not be less than invalidRows.");
+    }
+
+    this.status = ValidationRunStatus.COMPLETED;
+    this.totalRows = summary.totalRows();
+    this.validRows = summary.validRows();
+    this.invalidRows = summary.invalidRows();
+    this.issueCount = summary.issueCount();
+    this.finishedAt = finishedAt;
+    this.failureReason = null;
+  }
+
+  void failValidation(Instant finishedAt, String failureReason) {
+    requireStatus(ValidationRunStatus.PROCESSING);
+    requireFinishedAt(finishedAt);
+    requireFailureReason(failureReason);
+
+    this.status = ValidationRunStatus.FAILED;
     this.validRows = 0;
     this.invalidRows = 0;
     this.issueCount = 0;
@@ -183,6 +215,22 @@ class ValidationRun {
     Objects.requireNonNull(timestamp, fieldName + " must not be null.");
     if (timestamp.getNano() % 1_000 != 0) {
       throw new IllegalArgumentException(fieldName + " must use microsecond precision.");
+    }
+  }
+
+  private void requireFinishedAt(Instant finishedAt) {
+    requireMicrosecondPrecision(finishedAt, "finishedAt");
+    if (finishedAt.isBefore(startedAt)) {
+      throw new IllegalArgumentException("finishedAt must not be before startedAt.");
+    }
+  }
+
+  private void requireFailureReason(String failureReason) {
+    if (failureReason == null
+        || failureReason.isBlank()
+        || failureReason.length() > MAXIMUM_FAILURE_REASON_LENGTH) {
+      throw new IllegalArgumentException(
+          "failureReason must contain a non-whitespace character and not exceed 255 characters.");
     }
   }
 }

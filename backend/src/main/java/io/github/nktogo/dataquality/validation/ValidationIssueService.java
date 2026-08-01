@@ -12,12 +12,15 @@ class ValidationIssueService {
 
   private final ValidationIssueRepository validationIssueRepository;
   private final ValidationRunAccess validationRunAccess;
+  private final ValidationIssueWriter validationIssueWriter;
 
   ValidationIssueService(
       ValidationRunAccess validationRunAccess,
-      ValidationIssueRepository validationIssueRepository) {
+      ValidationIssueRepository validationIssueRepository,
+      ValidationIssueWriter validationIssueWriter) {
     this.validationRunAccess = validationRunAccess;
     this.validationIssueRepository = validationIssueRepository;
+    this.validationIssueWriter = validationIssueWriter;
   }
 
   @Transactional
@@ -26,12 +29,7 @@ class ValidationIssueService {
     List<ValidationIssueDraft> copiedDrafts = List.copyOf(drafts);
 
     validationRunAccess.requireValidationRun(runId);
-    if (copiedDrafts.isEmpty()) {
-      return;
-    }
-
-    validationIssueRepository.saveAll(
-        copiedDrafts.stream().map(draft -> new ValidationIssue(runId, draft)).toList());
+    validationIssueWriter.persistForExistingRun(runId, copiedDrafts);
   }
 
   @Transactional(readOnly = true)
