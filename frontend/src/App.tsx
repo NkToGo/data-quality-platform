@@ -33,10 +33,12 @@ function App() {
             The React application shell, Spring Boot service, local PostgreSQL configuration, and
             automated checks are in place. PostgreSQL-backed Dataset, Validation Profile, Validation
             Rule, SourceFile upload, and Validation Run creation, list, and detail APIs are
-            available in the backend. Creating a Validation Run parses its private stored CSV bytes
-            synchronously and records a PROCESSING or FAILED parser outcome. Validation Rule
-            execution and completed validation remain unavailable. The frontend shell does not call
-            these APIs or provide Validation Run screens yet.
+            available in the backend, together with Validation Issue retrieval. Creating a
+            Validation Run synchronously parses and validates its private stored CSV bytes. Normal
+            processing persists Issues and summary counters as COMPLETED, while expected or
+            recovered processing failures record safe FAILED outcomes. Unexpected server failures
+            can retain a durable PENDING Run. The frontend shell does not call these APIs or provide
+            Validation Run screens yet.
           </p>
         </section>
 

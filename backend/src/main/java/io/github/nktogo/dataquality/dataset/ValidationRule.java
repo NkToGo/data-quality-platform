@@ -73,7 +73,7 @@ class ValidationRule {
     this.profile = profile;
     this.fieldName = fieldName;
     this.ruleType = ruleType;
-    this.parameters = parameters;
+    this.parameters = Map.copyOf(parameters);
     this.severity = severity;
     this.enabled = enabled;
   }
@@ -95,7 +95,7 @@ class ValidationRule {
   }
 
   Map<String, Object> getParameters() {
-    return parameters;
+    return Map.copyOf(parameters);
   }
 
   ValidationRuleSeverity getSeverity() {

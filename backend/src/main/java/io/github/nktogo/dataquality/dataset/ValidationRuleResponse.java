@@ -10,4 +10,9 @@ public record ValidationRuleResponse(
     ValidationRuleType ruleType,
     Map<String, Object> parameters,
     ValidationRuleSeverity severity,
-    boolean enabled) {}
+    boolean enabled) {
+
+  public ValidationRuleResponse {
+    parameters = Map.copyOf(parameters);
+  }
+}

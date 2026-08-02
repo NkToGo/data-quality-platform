@@ -1,6 +1,9 @@
 package io.github.nktogo.dataquality.ingestion;
 
 import io.github.nktogo.dataquality.dataset.ValidationProfileAccess;
+import io.github.nktogo.dataquality.validation.ValidationInput;
+import io.github.nktogo.dataquality.validation.ValidationProcessingAccess;
+import io.github.nktogo.dataquality.validation.ValidationResult;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
@@ -17,16 +20,22 @@ class ValidationRunLifecycleService {
   private final SourceFileService sourceFileService;
   private final ValidationProfileAccess validationProfileAccess;
   private final CsvParser csvParser;
+  private final ValidationInputAdapter validationInputAdapter;
+  private final ValidationProcessingAccess validationProcessingAccess;
 
   ValidationRunLifecycleService(
       ValidationRunRepository validationRunRepository,
       SourceFileService sourceFileService,
       ValidationProfileAccess validationProfileAccess,
-      CsvParser csvParser) {
+      CsvParser csvParser,
+      ValidationInputAdapter validationInputAdapter,
+      ValidationProcessingAccess validationProcessingAccess) {
     this.validationRunRepository = validationRunRepository;
     this.sourceFileService = sourceFileService;
     this.validationProfileAccess = validationProfileAccess;
     this.csvParser = csvParser;
+    this.validationInputAdapter = validationInputAdapter;
+    this.validationProcessingAccess = validationProcessingAccess;
   }
 
   @Transactional
@@ -57,11 +66,34 @@ class ValidationRunLifecycleService {
     validationRun.start(startedAt);
     byte[] contentBytes = sourceFileService.requireContentBytes(validationRun.getSourceFileId());
 
+    ParsedCsv parsedCsv;
     try {
-      ParsedCsv parsedCsv = csvParser.parse(contentBytes);
-      validationRun.recordParsedRowCount(parsedCsv.rows().size());
+      parsedCsv = csvParser.parse(contentBytes);
     } catch (CsvParsingException exception) {
       validationRun.failParsing(finishedAt(startedAt), safeFailureReason(exception));
+      return toResponse(validationRun);
+    }
+
+    long totalRows = parsedCsv.rows().size();
+    validationRun.recordParsedRowCount(totalRows);
+
+    try {
+      ValidationInput validationInput = validationInputAdapter.adapt(parsedCsv);
+      ValidationResult validationResult =
+          validationProcessingAccess.validateAndPersist(
+              validationRun.getId(), validationRun.getProfileId(), validationInput);
+
+      switch (validationResult) {
+        case ValidationResult.Success success ->
+            validationRun.complete(success.summary(), finishedAt(startedAt));
+        case ValidationResult.MissingHeader missingHeader ->
+            validationRun.failValidation(finishedAt(startedAt), missingHeader.reason());
+      }
+
+      validationRunRepository.flush();
+    } catch (RuntimeException exception) {
+      throw new ValidationProcessingFailureException(
+          validationRun.getId(), startedAt, totalRows, exception);
     }
 
     return toResponse(validationRun);
