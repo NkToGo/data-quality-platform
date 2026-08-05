@@ -1,16 +1,34 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import App from './App';
+import { validationRunFixture } from './test/fixtures';
+import { renderWithRouter } from './test/renderWithRouter';
 
-describe('App', () => {
-  it('renders the foundation shell without claiming later features are available', () => {
-    render(<App />);
+describe('App routing', () => {
+  it('renders the dashboard route', () => {
+    renderWithRouter(<App />);
 
     expect(
-      screen.getByRole('heading', { level: 1, name: 'Data Quality Platform' }),
+      screen.getByRole('heading', { level: 2, name: 'Dashboard foundation' }),
     ).toBeInTheDocument();
+  });
+
+  it('renders an addressable Validation Run route', () => {
+    renderWithRouter(<App />, `/runs/${validationRunFixture.id}`);
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Validation Run' })).toBeInTheDocument();
+    expect(screen.getByText(validationRunFixture.id)).toBeInTheDocument();
+  });
+
+  it('renders an unmatched route and links back to the dashboard', () => {
+    renderWithRouter(<App />, '/does-not-exist');
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Page not found' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Return to dashboard' }));
+
     expect(
-      screen.getByText('These workflows are not available in the frontend yet.'),
+      screen.getByRole('heading', { level: 2, name: 'Dashboard foundation' }),
     ).toBeInTheDocument();
   });
 });
