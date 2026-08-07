@@ -1,13 +1,5 @@
 import { Link, Route, Routes, useParams } from 'react-router-dom';
-
-function DashboardRoute() {
-  return (
-    <section className="panel" aria-labelledby="dashboard-heading">
-      <h2 id="dashboard-heading">Dashboard foundation</h2>
-      <p>Read-only Dataset and Validation Run views will be added in the next Milestone 5 slice.</p>
-    </section>
-  );
-}
+import { DashboardPage } from './pages/DashboardPage';
 
 function ValidationRunRoute() {
   const { runId } = useParams();
@@ -50,13 +42,13 @@ function App() {
           <h1>
             <Link to="/">Data Quality Platform</Link>
           </h1>
-          <p className="intro">Read-only dashboard routing and API connectivity foundation.</p>
+          <p className="intro">Read-only Dataset and Validation Run dashboard.</p>
         </div>
       </header>
 
       <main id="main-content" className="content-width">
         <Routes>
-          <Route path="/" element={<DashboardRoute />} />
+          <Route path="/" element={<DashboardPage />} />
           <Route path="/runs/:runId" element={<ValidationRunRoute />} />
           <Route path="*" element={<NotFoundRoute />} />
         </Routes>
