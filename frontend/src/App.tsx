@@ -1,8 +1,33 @@
-const plannedCapabilities = [
-  'Dataset management and CSV ingestion',
-  'Configurable validation rules and issue tracking',
-  'Run summaries, issue filtering, and report export',
-];
+import { Link, Route, Routes, useParams } from 'react-router-dom';
+import { DashboardPage } from './pages/DashboardPage';
+
+function ValidationRunRoute() {
+  const { runId } = useParams();
+
+  return (
+    <section className="panel" aria-labelledby="run-heading">
+      <h2 id="run-heading">Validation Run</h2>
+      <p>
+        The addressable Run detail route is ready. Run data will be added in a later Milestone 5
+        slice.
+      </p>
+      <p>
+        <strong>Run ID:</strong> {runId}
+      </p>
+      <Link to="/">Back to dashboard</Link>
+    </section>
+  );
+}
+
+function NotFoundRoute() {
+  return (
+    <section className="panel" aria-labelledby="not-found-heading">
+      <h2 id="not-found-heading">Page not found</h2>
+      <p>The requested frontend route does not exist.</p>
+      <Link to="/">Return to dashboard</Link>
+    </section>
+  );
+}
 
 function App() {
   return (
@@ -13,44 +38,20 @@ function App() {
 
       <header className="site-header">
         <div className="content-width">
-          <p className="milestone-label">Project status</p>
-          <h1>Data Quality Platform</h1>
-          <p className="intro">
-            A foundation for building transparent, testable data-quality workflows in later
-            milestones.
-          </p>
+          <p className="milestone-label">Milestone 5</p>
+          <h1>
+            <Link to="/">Data Quality Platform</Link>
+          </h1>
+          <p className="intro">Read-only Dataset and Validation Run dashboard.</p>
         </div>
       </header>
 
       <main id="main-content" className="content-width">
-        <section className="panel" aria-labelledby="foundation-heading">
-          <p className="status">
-            <span className="status-indicator" aria-hidden="true" />
-            Foundation available
-          </p>
-          <h2 id="foundation-heading">Project foundation</h2>
-          <p>
-            The React application shell, Spring Boot service, local PostgreSQL configuration, and
-            automated checks are in place. PostgreSQL-backed Dataset, Validation Profile, Validation
-            Rule, SourceFile upload, and Validation Run creation, list, and detail APIs are
-            available in the backend, together with Validation Issue retrieval. Creating a
-            Validation Run synchronously parses and validates its private stored CSV bytes. Normal
-            processing persists Issues and summary counters as COMPLETED, while expected or
-            recovered processing failures record safe FAILED outcomes. Unexpected server failures
-            can retain a durable PENDING Run. The frontend shell does not call these APIs or provide
-            Validation Run screens yet.
-          </p>
-        </section>
-
-        <section className="panel" aria-labelledby="planned-heading">
-          <h2 id="planned-heading">Planned frontend capabilities</h2>
-          <ul>
-            {plannedCapabilities.map((capability) => (
-              <li key={capability}>{capability}</li>
-            ))}
-          </ul>
-          <p className="planned-note">These workflows are not available in the frontend yet.</p>
-        </section>
+        <Routes>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/runs/:runId" element={<ValidationRunRoute />} />
+          <Route path="*" element={<NotFoundRoute />} />
+        </Routes>
       </main>
 
       <footer className="site-footer">
