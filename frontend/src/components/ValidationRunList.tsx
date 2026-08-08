@@ -1,17 +1,11 @@
 import { Link } from 'react-router-dom';
-import type { ValidationRun, ValidationRunStatus } from '../api/contracts';
+import type { ValidationRun } from '../api/contracts';
+import { ValidationRunStatusBadge } from './ValidationRunStatusBadge';
 
 interface ValidationRunListProps {
   validationRuns: ValidationRun[];
   datasetNames: ReadonlyMap<string, string>;
 }
-
-const STATUS_LABELS: Record<ValidationRunStatus, string> = {
-  PENDING: 'Pending',
-  PROCESSING: 'Processing',
-  COMPLETED: 'Completed',
-  FAILED: 'Failed',
-};
 
 export function ValidationRunList({ validationRuns, datasetNames }: ValidationRunListProps) {
   return (
@@ -44,9 +38,7 @@ export function ValidationRunList({ validationRuns, datasetNames }: ValidationRu
                   <Link to={`/runs/${validationRun.id}`}>{validationRun.id}</Link>
                 </th>
                 <td>
-                  <span className={`run-status run-status-${validationRun.status.toLowerCase()}`}>
-                    {STATUS_LABELS[validationRun.status]}
-                  </span>
+                  <ValidationRunStatusBadge status={validationRun.status} />
                 </td>
                 <td>
                   {datasetName === undefined ? null : <span>{datasetName}</span>}

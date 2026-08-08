@@ -1,22 +1,11 @@
 import { Link, Route, Routes, useParams } from 'react-router-dom';
 import { DashboardPage } from './pages/DashboardPage';
+import { ValidationRunDetailPage } from './pages/ValidationRunDetailPage';
 
 function ValidationRunRoute() {
   const { runId } = useParams();
 
-  return (
-    <section className="panel" aria-labelledby="run-heading">
-      <h2 id="run-heading">Validation Run</h2>
-      <p>
-        The addressable Run detail route is ready. Run data will be added in a later Milestone 5
-        slice.
-      </p>
-      <p>
-        <strong>Run ID:</strong> {runId}
-      </p>
-      <Link to="/">Back to dashboard</Link>
-    </section>
-  );
+  return runId === undefined ? <NotFoundRoute /> : <ValidationRunDetailPage runId={runId} />;
 }
 
 function NotFoundRoute() {
