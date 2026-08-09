@@ -63,6 +63,9 @@ export function ValidationIssueList({ issues }: ValidationIssueListProps) {
   );
 
   const filtersActive = severity !== '' || fieldName !== '';
+  const filterResultMessage = filtersActive
+    ? `Showing ${filteredIssues.length} of ${issues.length} persisted Issues.`
+    : `Showing all ${issues.length} persisted Issues.`;
   const clearFilters = () => {
     setSeverity('');
     setFieldName('');
@@ -70,7 +73,7 @@ export function ValidationIssueList({ issues }: ValidationIssueListProps) {
 
   return (
     <>
-      <fieldset className="issue-filters">
+      <fieldset className="issue-filters" aria-describedby="issue-filter-results">
         <legend>Filter Issues</legend>
         <label>
           Severity
@@ -106,6 +109,16 @@ export function ValidationIssueList({ issues }: ValidationIssueListProps) {
           Clear filters
         </button>
       </fieldset>
+
+      <p
+        id="issue-filter-results"
+        className="visually-hidden"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {filterResultMessage}
+      </p>
 
       {filteredIssues.length === 0 ? (
         <EmptyState

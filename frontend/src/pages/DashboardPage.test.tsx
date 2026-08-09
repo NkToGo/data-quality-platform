@@ -72,6 +72,14 @@ describe('DashboardPage', () => {
 
     await screen.findByRole('table', { name: 'Datasets' });
     await screen.findByRole('table', { name: 'Validation Runs' });
+    expect(screen.getByRole('region', { name: 'Scrollable Dataset table' })).toHaveAttribute(
+      'tabindex',
+      '0',
+    );
+    expect(screen.getByRole('region', { name: 'Scrollable Validation Run table' })).toHaveAttribute(
+      'tabindex',
+      '0',
+    );
 
     const datasetRows = bodyRows('Datasets');
     expect(datasetRows).toHaveLength(2);
@@ -120,12 +128,15 @@ describe('DashboardPage', () => {
 
     renderWithRouter(<DashboardPage />);
 
-    expect(await screen.findByText('Datasets could not be loaded')).toBeInTheDocument();
+    const datasetAlert = await screen.findByRole('alert');
+    expect(
+      within(datasetAlert).getByRole('heading', { name: 'Datasets could not be loaded' }),
+    ).toBeInTheDocument();
     const runTable = await screen.findByRole('table', { name: 'Validation Runs' });
     expect(within(runTable).getByText(validationRunFixture.datasetId)).toBeInTheDocument();
     expect(within(runTable).queryByText(datasetFixture.name)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry Datasets' }));
+    fireEvent.click(within(datasetAlert).getByRole('button', { name: 'Retry Datasets' }));
 
     expect(await within(runTable).findByText(datasetFixture.name)).toBeInTheDocument();
     expect(getDatasetsMock).toHaveBeenCalledTimes(2);
@@ -156,7 +167,9 @@ describe('DashboardPage', () => {
 
     renderWithRouter(<DashboardPage />);
 
-    expect(await screen.findByText('Loading Datasets…')).toBeInTheDocument();
+    const datasetsSection = screen.getByRole('region', { name: 'Datasets' });
+    const loadingStatus = await within(datasetsSection).findByRole('status');
+    expect(loadingStatus).toHaveTextContent('Loading Datasets…');
     expect(await screen.findByRole('link', { name: validationRunFixture.id })).toBeInTheDocument();
     expect(screen.getByText(validationRunFixture.datasetId)).toBeInTheDocument();
   });

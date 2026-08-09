@@ -261,6 +261,9 @@ describe('ValidationRunDetailPage', () => {
     renderDetail();
 
     await screen.findByRole('table', { name: 'Persisted Validation Issues' });
+    expect(
+      screen.getByRole('region', { name: 'Scrollable Validation Issue table' }),
+    ).toHaveAttribute('tabindex', '0');
     const rows = issueRows();
     expect(rows).toHaveLength(issues.length);
     issues.forEach((issue, index) => {
@@ -302,6 +305,11 @@ describe('ValidationRunDetailPage', () => {
     renderDetail();
 
     await screen.findByText(issues[0].message);
+    const filters = screen.getByRole('group', { name: 'Filter Issues' });
+    const filterResults = screen.getByRole('status');
+    expect(filters).toHaveAttribute('aria-describedby', filterResults.id);
+    expect(filterResults).toHaveTextContent(`Showing all ${issues.length} persisted Issues.`);
+
     fireEvent.change(screen.getByLabelText('Severity'), { target: { value: 'WARNING' } });
 
     const rows = issueRows();
@@ -309,6 +317,7 @@ describe('ValidationRunDetailPage', () => {
     expect(within(rows[0]).getByText(issues[1].message)).toBeInTheDocument();
     expect(within(rows[1]).getByText(issues[3].message)).toBeInTheDocument();
     expect(screen.queryByText(issues[0].message)).not.toBeInTheDocument();
+    expect(filterResults).toHaveTextContent(`Showing 2 of ${issues.length} persisted Issues.`);
     expect(getValidationIssuesMock).toHaveBeenCalledOnce();
   });
 
@@ -348,6 +357,9 @@ describe('ValidationRunDetailPage', () => {
     fireEvent.change(screen.getByLabelText('Field name'), { target: { value: ' email ' } });
 
     expect(screen.getByText('No matching Issues')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      `Showing 0 of ${issues.length} persisted Issues.`,
+    );
     expect(
       screen.queryByRole('table', { name: 'Persisted Validation Issues' }),
     ).not.toBeInTheDocument();
@@ -356,6 +368,9 @@ describe('ValidationRunDetailPage', () => {
 
     expect(screen.getByLabelText('Severity')).toHaveValue('');
     expect(screen.getByLabelText('Field name')).toHaveValue('');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      `Showing all ${issues.length} persisted Issues.`,
+    );
     expect(issueRows()).toHaveLength(issues.length);
     expect(getValidationIssuesMock).toHaveBeenCalledOnce();
   });
@@ -377,11 +392,16 @@ describe('ValidationRunDetailPage', () => {
 
     renderDetail();
 
-    expect(await screen.findByText('Validation Issues could not be loaded')).toBeInTheDocument();
+    const issueAlert = await screen.findByRole('alert');
+    expect(
+      within(issueAlert).getByRole('heading', {
+        name: 'Validation Issues could not be loaded',
+      }),
+    ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Run summary' })).toBeInTheDocument();
     expect(screen.getByText(validationRunFixture.id)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry Validation Issues' }));
+    fireEvent.click(within(issueAlert).getByRole('button', { name: 'Retry Validation Issues' }));
 
     expect(await screen.findByText(issues[0].message)).toBeInTheDocument();
     expect(getValidationIssuesMock).toHaveBeenCalledTimes(2);
@@ -396,6 +416,7 @@ describe('ValidationRunDetailPage', () => {
     renderDetail();
 
     expect(await screen.findByText('Loading Validation Issues…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading Validation Issues…');
     expect(screen.getByRole('heading', { name: 'Run summary' })).toBeInTheDocument();
   });
 
