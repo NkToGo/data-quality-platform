@@ -243,8 +243,8 @@ describe('ValidationRunDetailPage', () => {
 
     renderDetail();
 
-    expect(await screen.findByText(validationRunFixture.datasetId)).toBeInTheDocument();
-    expect(screen.getByText('Dataset name is unavailable.')).toBeInTheDocument();
+    expect(await screen.findByText('Dataset name is unavailable.')).toBeInTheDocument();
+    expect(screen.getByText(validationRunFixture.datasetId)).toBeInTheDocument();
     expect(screen.queryByText(datasetFixture.name)).not.toBeInTheDocument();
   });
 
