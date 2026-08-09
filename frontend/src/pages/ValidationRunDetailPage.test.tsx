@@ -1,8 +1,8 @@
-import { act, fireEvent, screen, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { Link, Route, Routes, useParams } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDatasets, getValidationIssues, getValidationRun } from '../api/client';
-import type { ValidationIssue, ValidationRun } from '../api/contracts';
+import type { Dataset, ValidationIssue, ValidationRun } from '../api/contracts';
 import { datasetFixture, validationIssueFixture, validationRunFixture } from '../test/fixtures';
 import { renderWithRouter } from '../test/renderWithRouter';
 import { ValidationRunDetailPage } from './ValidationRunDetailPage';
@@ -98,11 +98,13 @@ const secondIssue: ValidationIssue = {
 
 function deferred<T>() {
   let resolvePromise: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((resolve) => {
+  let rejectPromise: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<T>((resolve, reject) => {
     resolvePromise = resolve;
+    rejectPromise = reject;
   });
 
-  return { promise, resolve: resolvePromise };
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
 function renderDetail(runId = validationRunFixture.id) {
@@ -247,13 +249,21 @@ describe('ValidationRunDetailPage', () => {
   });
 
   it('keeps the Run usable when Dataset lookup fails', async () => {
-    getDatasetsMock.mockRejectedValue(new Error('Dataset context unavailable.'));
+    const datasetRequest = deferred<Dataset[]>();
+    getDatasetsMock.mockReturnValue(datasetRequest.promise);
 
     renderDetail();
 
+    await waitFor(() => expect(getDatasetsMock).toHaveBeenCalledOnce());
+    expect(screen.getByText('Dataset name is loading.')).toBeInTheDocument();
+
+    await act(async () => {
+      datasetRequest.reject(new Error('Dataset context unavailable.'));
+    });
+
+    expect(await screen.findByText('Dataset name is unavailable.')).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Run summary' })).toBeInTheDocument();
     expect(screen.getByText(validationRunFixture.datasetId)).toBeInTheDocument();
-    expect(await screen.findByText('Dataset name is unavailable.')).toBeInTheDocument();
     expect(await screen.findByText(issues[0].message)).toBeInTheDocument();
   });
 
