@@ -4,10 +4,11 @@ The Data Quality Platform is a learning and software-engineering project for bui
 
 ## Current status
 
-Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQL persistence foundation and the Dataset, Validation Profile, and Validation Rule persistence vertical slices. Milestone 3 is complete with SourceFile upload, deterministic CSV parsing, Validation Run creation and parser lifecycle persistence, and Validation Run retrieval. Milestone 4 is complete with deterministic rule-specific parameter validation, end-to-end Validation Rule execution, Validation Issue persistence and retrieval, and completed Validation Run summaries:
+Milestones 1 through 4 are complete. Milestone 5 now has a read-only frontend Dashboard and addressable Validation Run detail experience implemented; it remains in progress pending final review, CI, manual end-to-end verification, and merge:
 
 - a Java 21 and Spring Boot backend
 - a React and TypeScript frontend
+- a read-only Dashboard for persisted Datasets, Validation Runs, summaries, and Issues
 - a local PostgreSQL service through Docker Compose
 - environment-backed backend datasource configuration
 - Spring Data JPA, Bean Validation, and Flyway infrastructure
@@ -30,9 +31,9 @@ Milestone 1 provides the project foundation. Milestone 2 completed the PostgreSQ
 - backend and frontend tests and formatting checks
 - a GitHub Actions workflow for repository checks
 
-The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies migrations V1 through V9 for Dataset, Validation Profile, Validation Rule, rule-specific parameter constraints, SourceFile, Validation Run, Validation Run lifecycle and completed-summary constraints, and Validation Issue persistence. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, Validation Rule, SourceFile upload, Validation Run, and Validation Issue retrieval endpoints documented below. The frontend remains a static application shell.
+The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies migrations V1 through V9 for Dataset, Validation Profile, Validation Rule, rule-specific parameter constraints, SourceFile, Validation Run, Validation Run lifecycle and completed-summary constraints, and Validation Issue persistence. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes the Actuator health endpoint and the Dataset, Validation Profile, Validation Rule, SourceFile upload, Validation Run, and Validation Issue retrieval endpoints documented below. The frontend provides the read-only Milestone 5 Dashboard documented below.
 
-Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile, and every Rule's parameters are validated against its type-specific contract before persistence. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. Creating a Validation Run for a SourceFile and a Validation Profile from the same Dataset reads the private stored bytes, parses them, loads the Profile's enabled Rules, and validates the parsed rows synchronously. Successful validation atomically persists generated Issues and the `totalRows`, `validRows`, `invalidRows`, and `issueCount` summary before completing the Run. Expected parser failures, missing required headers, and recovered validation-processing failures persist safe `FAILED` outcomes without partial Issues. Unexpected SourceFile-access or parser runtime failures retain the separately committed `PENDING` Run for diagnosis. Validation Runs can be listed globally and retrieved by ID, and their persisted Issues can be retrieved through a read-only endpoint. The completion audit has passed, and Milestone 4 is complete. Issue filtering remains planned for Milestone 5, and report generation remains planned for Milestone 6. Dataset, profile, rule, SourceFile, and Validation Run updates or deletion, profile, rule, and SourceFile detail retrieval, pagination, authentication, and AI features are also not implemented yet.
+Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile, and every Rule's parameters are validated against its type-specific contract before persistence. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. Creating a Validation Run for a SourceFile and a Validation Profile from the same Dataset reads the private stored bytes, parses them, loads the Profile's enabled Rules, and validates the parsed rows synchronously. Successful validation atomically persists generated Issues and the `totalRows`, `validRows`, `invalidRows`, and `issueCount` summary before completing the Run. Expected parser failures, missing required headers, and recovered validation-processing failures persist safe `FAILED` outcomes without partial Issues. Unexpected SourceFile-access or parser runtime failures retain the separately committed `PENDING` Run for diagnosis. Validation Runs can be listed globally and retrieved by ID, and their persisted Issues can be retrieved through a read-only endpoint. The frontend filters retrieved Issues client-side; the backend collection remains unfiltered and unpaged. Report and export functionality remains deferred to Milestone 6 or later. Dataset, profile, rule, SourceFile, and Validation Run updates or deletion, profile, rule, and SourceFile detail retrieval, pagination, authentication, and AI features are also not implemented yet.
 
 ## Repository layout
 
@@ -122,6 +123,42 @@ Get-Content ..\.env |
 ```
 
 The backend listens on `http://localhost:8080`. Its health endpoint is `http://localhost:8080/actuator/health`. A missing or incorrect database password causes startup to fail when Flyway connects.
+
+## Read-only frontend Dashboard
+
+The `/` Dashboard route presents the persisted Dataset collection and the global Validation Run collection. Each Dataset row shows its name, optional description, UUID, and creation timestamp. Each Validation Run row links to its addressable `/runs/:runId` detail route and shows its textual status, Dataset context, and persisted `totalRows`, `validRows`, `invalidRows`, and `issueCount` summary counters. Collections stay in the order supplied by the backend; the frontend does not sort them.
+
+Dataset names are resolved from the Dataset collection when possible. The Dataset UUID remains visible and is the fallback when a matching name is unavailable or the Dataset request fails. SourceFile and Validation Profile references remain UUID-only because the frontend has no SourceFile or Profile detail endpoint to query.
+
+The Validation Run detail route presents persisted metadata, lifecycle timestamps, any failure reason, the four persisted summary counters, and the Run's persisted Validation Issues. Issue rows show the logical row number, exact field name, Rule type, severity text, message, and observed value. Markup-like observed values render literally as text. Non-empty whitespace is preserved, while null and empty strings have distinct labels. Entering or refreshing a `/runs/:runId` URL works with the Vite development server.
+
+Issue filtering happens entirely in the browser after the collection is retrieved. Severity filtering matches `ERROR` or `WARNING`. Field-name filtering uses exact, case-sensitive, and whitespace-sensitive equality. When both filters are active, an Issue must match both conditions. Filtering preserves the backend collection order and sends no filter parameters to the API.
+
+The Dashboard has independent loading, error, Retry, and empty states for Datasets and Validation Runs. Validation Run loading and Issue loading have their own error and Retry states. An existing Run without persisted Issues has a dedicated empty state. Active filters with no matches show a distinct empty-filter-result state and a Clear filters control. Retry controls repeat the relevant read-only GET request; they do not retry backend processing.
+
+Milestone 5 remains read-only. It has no UI for creating, uploading, updating, deleting, starting, retrying processing, or cancelling resources. The existing REST API and commands below can create representative local data. The current MVP collections are unpaged and provide no pagination, server-side filtering, or server-side sorting. Report and export functionality remains deferred to Milestone 6 or later.
+
+### Run the frontend locally
+
+With PostgreSQL and the backend running, start Vite in another terminal.
+
+Unix-like shells:
+
+```sh
+cd frontend
+npm ci
+npm run dev
+```
+
+Windows PowerShell:
+
+```powershell
+cd frontend
+npm.cmd ci
+npm.cmd run dev
+```
+
+Open the URL printed by Vite, normally `http://localhost:5173/`. During development, Vite proxies relative `/api` requests to `http://localhost:8080`; this workflow does not require backend CORS configuration.
 
 ## Dataset API
 
@@ -686,29 +723,11 @@ Issues are ordered by `rowNumber` ascending, `fieldName` ascending, `ruleType` a
 
 A valid but unknown Run UUID returns the existing `Validation Run not found` `404 Not Found` Problem Details response with the Issue collection path as its `instance`. A malformed Run UUID returns `400 Bad Request`.
 
-Issue retrieval is read-only. It does not parse CSV, invoke validation, create or delete Issues, calculate summaries, compare the result with `issueCount`, or change the Run lifecycle. No filtering, pagination, user-selectable sorting, or public Issue write endpoint is implemented. Issue filtering belongs to Milestone 5, and report generation belongs to Milestone 6.
+Issue retrieval is read-only. It does not parse CSV, invoke validation, create or delete Issues, calculate summaries, compare the result with `issueCount`, or change the Run lifecycle. The endpoint itself provides no filtering, pagination, user-selectable sorting, or public Issue write operation. The Milestone 5 frontend filters the retrieved collection client-side by severity and exact field name; it does not send filter parameters to the backend. Report and export functionality remains deferred to Milestone 6 or later.
 
 ## Persistence relationships
 
 Validation Profiles and SourceFiles require an existing Dataset, Validation Rules require an existing Validation Profile, Validation Runs require an existing Dataset, SourceFile, and Validation Profile, and Validation Issues require an existing Validation Run. Validation Run creation also requires the SourceFile and Validation Profile to belong to the same Dataset. All foreign keys use `ON DELETE RESTRICT`, and no cascading deletion is configured. If rows are removed directly during local cleanup, delete Validation Issues first, then Validation Runs, then Validation Rules and SourceFiles, then Validation Profiles, and finally Datasets.
-
-Run the frontend on Unix-like systems:
-
-```sh
-cd frontend
-npm ci
-npm run dev
-```
-
-Run the frontend on Windows PowerShell:
-
-```powershell
-cd frontend
-npm.cmd ci
-npm.cmd run dev
-```
-
-The Vite development server prints its local URL, normally `http://localhost:5173`.
 
 ## Backend commands
 
@@ -774,7 +793,7 @@ The GitHub Actions workflow runs three independent jobs on pushes and pull reque
 - Milestone 2: complete, with PostgreSQL persistence and Dataset, Validation Profile, and Validation Rule REST vertical slices
 - Milestone 3: complete, with SourceFile upload, exact byte storage and SHA-256 checksums, synchronous CSV parsing, persisted `PROCESSING` and parser-failure lifecycle states, and Validation Run retrieval
 - Milestone 4: complete, with deterministic rule-specific parameter validation, synchronous Rule execution, Validation Issue persistence and retrieval, validation-derived Run summaries, and successful transition to `COMPLETED`
-- Milestone 5: dataset, run, summary, and issue screens
+- Milestone 5: in progress, with the read-only Dashboard, addressable Run detail, persisted summaries and Issues, client-side filters, and user-visible async and empty states implemented and awaiting final manual verification and review
 - Milestone 6: report export, structured logs, runtime metrics, and final documentation
 
 The detailed product scope and milestone definitions are maintained in `PROJECT_BRIEF.md`.
