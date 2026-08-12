@@ -214,6 +214,24 @@ class ValidationIssueServiceTests {
         .isInstanceOf(UnsupportedOperationException.class);
   }
 
+  @Test
+  void reportingReadBoundaryPreservesTheExistingOrderedEmptyCollectionBehavior() {
+    UUID runId = UUID.randomUUID();
+    when(validationIssueRepository.findAllByRunIdOrderByRowNumberAscFieldNameAscRuleTypeAscIdAsc(
+            runId))
+        .thenReturn(List.of());
+
+    List<ValidationIssueResponse> responses =
+        validationIssueService.getValidationIssuesForReport(runId);
+
+    InOrder calls = inOrder(validationRunAccess, validationIssueRepository);
+    calls.verify(validationRunAccess).requireValidationRun(runId);
+    calls
+        .verify(validationIssueRepository)
+        .findAllByRunIdOrderByRowNumberAscFieldNameAscRuleTypeAscIdAsc(runId);
+    assertThat(responses).isEmpty();
+  }
+
   private ValidationIssueDraft draft(
       long rowNumber,
       String fieldName,

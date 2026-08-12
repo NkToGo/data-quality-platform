@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -43,6 +44,49 @@ class ValidationRunServiceTests {
     calls.verify(lifecycleService).createPending(fileId, profileId);
     calls.verify(lifecycleService).process(runId);
     verifyNoInteractions(recoveryService);
+  }
+
+  @Test
+  void mapsAnExistingRunThroughTheReportingReadBoundary() {
+    UUID runId = UUID.randomUUID();
+    UUID datasetId = UUID.randomUUID();
+    UUID sourceFileId = UUID.randomUUID();
+    UUID profileId = UUID.randomUUID();
+    ValidationRun validationRun = mock(ValidationRun.class);
+    when(validationRunRepository.findById(runId)).thenReturn(Optional.of(validationRun));
+    when(validationRun.getId()).thenReturn(runId);
+    when(validationRun.getDatasetId()).thenReturn(datasetId);
+    when(validationRun.getSourceFileId()).thenReturn(sourceFileId);
+    when(validationRun.getProfileId()).thenReturn(profileId);
+    when(validationRun.getStatus()).thenReturn(ValidationRunStatus.PENDING);
+
+    ValidationRunResponse response = service.getValidationRunForReport(runId);
+
+    assertThat(response)
+        .isEqualTo(
+            new ValidationRunResponse(
+                runId,
+                datasetId,
+                sourceFileId,
+                profileId,
+                ValidationRunStatus.PENDING,
+                0,
+                0,
+                0,
+                0,
+                null,
+                null,
+                null));
+  }
+
+  @Test
+  void preservesNotFoundBehaviorAtTheReportingReadBoundary() {
+    UUID runId = UUID.randomUUID();
+    when(validationRunRepository.findById(runId)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(() -> service.getValidationRunForReport(runId))
+        .isInstanceOf(ValidationRunNotFoundException.class)
+        .hasMessage("Validation Run '" + runId + "' was not found.");
   }
 
   @Test

@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-class ValidationRunService implements ValidationRunAccess {
+class ValidationRunService implements ValidationRunAccess, ValidationRunReportAccess {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(ValidationRunService.class);
 
@@ -52,6 +52,12 @@ class ValidationRunService implements ValidationRunAccess {
 
   @Transactional(readOnly = true)
   ValidationRunResponse getById(UUID runId) {
+    return getValidationRunForReport(runId);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public ValidationRunResponse getValidationRunForReport(UUID runId) {
     return toResponse(requireExisting(runId));
   }
 
