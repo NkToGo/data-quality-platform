@@ -10,6 +10,7 @@ import { ValidationRunDetailPage } from './ValidationRunDetailPage';
 vi.mock('../api/client', () => ({
   getDatasets: vi.fn(),
   getValidationIssues: vi.fn(),
+  getValidationRunReport: vi.fn(),
   getValidationRun: vi.fn(),
 }));
 
@@ -194,6 +195,7 @@ describe('ValidationRunDetailPage', () => {
     expect(within(summary).getByText('12')).toBeInTheDocument();
     expect(within(summary).getByText('5')).toBeInTheDocument();
     expect(within(summary).getByText('8')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Export report' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to dashboard' })).toHaveAttribute('href', '/');
   });
 
@@ -217,6 +219,7 @@ describe('ValidationRunDetailPage', () => {
     expect(screen.getByText('Not finished')).toBeInTheDocument();
     expect(screen.queryByText(/background|actively processing/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Failure reason')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download JSON report' })).toBeEnabled();
   });
 
   it('shows a persisted failure reason only when present', async () => {
@@ -236,6 +239,7 @@ describe('ValidationRunDetailPage', () => {
     expect(await screen.findByText('Failed')).toBeInTheDocument();
     expect(screen.getByText('Failure reason')).toBeInTheDocument();
     expect(screen.getByText(failedRun.failureReason!)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download CSV report' })).toBeEnabled();
   });
 
   it('uses the Dataset UUID when no matching Dataset exists', async () => {
@@ -265,6 +269,7 @@ describe('ValidationRunDetailPage', () => {
     expect(await screen.findByRole('heading', { name: 'Run summary' })).toBeInTheDocument();
     expect(screen.getByText(validationRunFixture.datasetId)).toBeInTheDocument();
     expect(await screen.findByText(issues[0].message)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download JSON report' })).toBeEnabled();
   });
 
   it('renders persisted Issues in API order and safely distinguishes observed values', async () => {
@@ -410,6 +415,7 @@ describe('ValidationRunDetailPage', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Run summary' })).toBeInTheDocument();
     expect(screen.getByText(validationRunFixture.id)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download CSV report' })).toBeEnabled();
 
     fireEvent.click(within(issueAlert).getByRole('button', { name: 'Retry Validation Issues' }));
 

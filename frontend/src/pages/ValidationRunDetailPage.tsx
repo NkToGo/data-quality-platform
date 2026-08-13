@@ -5,6 +5,7 @@ import type { ValidationRun } from '../api/contracts';
 import { EmptyState, ErrorState, LoadingState } from '../components/AsyncState';
 import { ValidationIssueList } from '../components/ValidationIssueList';
 import { ValidationRunMetadata } from '../components/ValidationRunMetadata';
+import { ValidationRunReportExports } from '../components/ValidationRunReportExports';
 import { ValidationRunSummary } from '../components/ValidationRunSummary';
 import { useAsyncResource } from '../hooks/useAsyncResource';
 
@@ -80,6 +81,7 @@ function LoadedValidationRun({ validationRun }: { validationRun: ValidationRun }
         datasetContextStatus={datasets.status}
       />
       <ValidationRunSummary validationRun={validationRun} />
+      <ValidationRunReportExports runId={validationRun.id} />
       <section className="panel run-issues" aria-labelledby="run-issues-heading">
         <div className="section-heading">
           <div>

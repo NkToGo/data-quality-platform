@@ -3,6 +3,7 @@ import {
   ApiError,
   getDatasets,
   getValidationIssues,
+  getValidationRunReport,
   getValidationRun,
   getValidationRuns,
 } from './client';
@@ -12,7 +13,12 @@ import {
   validationIssueFixture,
   validationRunFixture,
 } from '../test/fixtures';
-import type { ValidationIssueSeverity, ValidationRuleType, ValidationRunStatus } from './contracts';
+import type {
+  ValidationIssueSeverity,
+  ValidationReportFormat,
+  ValidationRuleType,
+  ValidationRunStatus,
+} from './contracts';
 
 const fetchMock = vi.fn<typeof fetch>();
 
@@ -188,6 +194,71 @@ describe('Data Quality API client', () => {
     await expect(getValidationIssues(validationRunFixture.id)).rejects.toMatchObject({
       kind: 'invalid-response',
     });
+  });
+
+  it.each<[ValidationReportFormat, string, string]>([
+    ['json', 'application/json', '{"runId":"report-run"}'],
+    ['csv', 'text/csv', 'rowNumber,fieldName\r\n2,email\r\n'],
+  ])('downloads the exact %s report bytes', async (format, mediaType, body) => {
+    const controller = new AbortController();
+    fetchMock.mockResolvedValueOnce(
+      new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': `${mediaType}; charset=UTF-8` },
+      }),
+    );
+
+    const report = await getValidationRunReport(validationRunFixture.id, format, controller.signal);
+
+    expect(await report.text()).toBe(body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/validation-runs/${validationRunFixture.id}/report?format=${format}`,
+      {
+        method: 'GET',
+        headers: { Accept: mediaType },
+        signal: controller.signal,
+      },
+    );
+  });
+
+  it('rejects a successful report response with the wrong media type', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response('{"runId":"report-run"}', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      }),
+    );
+
+    await expect(getValidationRunReport(validationRunFixture.id, 'json')).rejects.toEqual(
+      new ApiError('invalid-response', 'The Data Quality API returned an unexpected response.'),
+    );
+  });
+
+  it('uses Problem Details for a report HTTP error', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(problemDetailsFixture, 404, 'application/problem+json'),
+    );
+
+    await expect(getValidationRunReport(validationRunFixture.id, 'csv')).rejects.toMatchObject({
+      kind: 'http',
+      status: 404,
+      message: problemDetailsFixture.detail,
+    });
+  });
+
+  it('reports a report network failure with the existing application-owned message', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('Private connection details'));
+
+    await expect(getValidationRunReport(validationRunFixture.id, 'json')).rejects.toEqual(
+      new ApiError('network', 'The Data Quality API could not be reached.'),
+    );
+  });
+
+  it('preserves report request aborts', async () => {
+    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+    fetchMock.mockRejectedValueOnce(abortError);
+
+    await expect(getValidationRunReport(validationRunFixture.id, 'csv')).rejects.toBe(abortError);
   });
 
   it('uses the RFC Problem Details detail for an HTTP error', async () => {

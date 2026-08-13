@@ -15,6 +15,9 @@ export type ValidationRuleType = (typeof validationRuleTypes)[number];
 export const validationIssueSeverities = ['ERROR', 'WARNING'] as const;
 export type ValidationIssueSeverity = (typeof validationIssueSeverities)[number];
 
+export const validationReportFormats = ['json', 'csv'] as const;
+export type ValidationReportFormat = (typeof validationReportFormats)[number];
+
 export interface Dataset {
   id: string;
   name: string;
