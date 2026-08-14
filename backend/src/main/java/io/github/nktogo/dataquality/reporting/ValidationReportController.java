@@ -4,6 +4,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 class ValidationReportController {
 
+  private static final Logger LOGGER = LoggerFactory.getLogger(ValidationReportController.class);
   private static final MediaType CSV_MEDIA_TYPE =
       new MediaType("text", "csv", StandardCharsets.UTF_8);
 
@@ -42,6 +45,7 @@ class ValidationReportController {
                   .body(validationReportCsvWriter.write(report));
         };
 
+    logGenerated(report, format);
     return response;
   }
 
@@ -55,5 +59,23 @@ class ValidationReportController {
         .contentType(mediaType)
         .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
         .header(HttpHeaders.CACHE_CONTROL, "no-store");
+  }
+
+  private static void logGenerated(ValidationReport report, ReportFormat format) {
+    var validationRun = report.validationRun();
+    LOGGER
+        .atInfo()
+        .addKeyValue("event", "validation_report.generated")
+        .addKeyValue("runId", validationRun.id())
+        .addKeyValue("datasetId", validationRun.datasetId())
+        .addKeyValue("sourceFileId", validationRun.sourceFileId())
+        .addKeyValue("profileId", validationRun.profileId())
+        .addKeyValue("status", validationRun.status())
+        .addKeyValue("format", format.queryValue())
+        .addKeyValue("totalRows", validationRun.totalRows())
+        .addKeyValue("validRows", validationRun.validRows())
+        .addKeyValue("invalidRows", validationRun.invalidRows())
+        .addKeyValue("issueCount", validationRun.issueCount())
+        .log("Validation report generated.");
   }
 }

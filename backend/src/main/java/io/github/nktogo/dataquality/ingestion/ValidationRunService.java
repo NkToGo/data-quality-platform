@@ -27,19 +27,21 @@ class ValidationRunService implements ValidationRunAccess, ValidationRunReportAc
 
   ValidationRunResponse create(UUID fileId, CreateValidationRunRequest request) {
     UUID runId = validationRunLifecycleService.createPending(fileId, request.profileId());
+    logCreated(runId, fileId, request.profileId());
     try {
-      return validationRunLifecycleService.process(runId);
+      return recordProcessingResult(validationRunLifecycleService.process(runId));
     } catch (ValidationProcessingFailureException failure) {
-      LOGGER.error(
-          "Validation processing failed for Validation Run '{}'; attempting recovery.",
-          failure.runId(),
-          failure.getCause());
+      logExecutionFailed(runId, fileId, request.profileId(), failure.getCause());
       try {
-        return validationRunRecoveryService.recover(failure);
+        return recordProcessingResult(validationRunRecoveryService.recover(failure));
       } catch (RuntimeException recoveryFailure) {
+        logRecoveryFailed(runId, fileId, request.profileId(), recoveryFailure);
         recoveryFailure.addSuppressed(failure);
         throw recoveryFailure;
       }
+    } catch (RuntimeException executionFailure) {
+      logExecutionFailed(runId, fileId, request.profileId(), executionFailure);
+      throw executionFailure;
     }
   }
 
@@ -71,6 +73,87 @@ class ValidationRunService implements ValidationRunAccess, ValidationRunReportAc
     return validationRunRepository
         .findById(runId)
         .orElseThrow(() -> new ValidationRunNotFoundException(runId));
+  }
+
+  private ValidationRunResponse recordProcessingResult(ValidationRunResponse response) {
+    switch (response.status()) {
+      case COMPLETED -> {
+        logFinished(response);
+      }
+      case FAILED -> {
+        logProcessingFailed(response);
+      }
+      case PENDING, PROCESSING -> {
+        LOGGER
+            .atError()
+            .addKeyValue("event", "validation_run.execution_failed")
+            .addKeyValue("runId", response.id())
+            .addKeyValue("sourceFileId", response.sourceFileId())
+            .addKeyValue("profileId", response.profileId())
+            .addKeyValue("status", response.status())
+            .log("Validation Run processing returned a nonterminal state.");
+      }
+    }
+    return response;
+  }
+
+  private static void logCreated(UUID runId, UUID fileId, UUID profileId) {
+    LOGGER
+        .atInfo()
+        .addKeyValue("event", "validation_run.created")
+        .addKeyValue("runId", runId)
+        .addKeyValue("sourceFileId", fileId)
+        .addKeyValue("profileId", profileId)
+        .log("Validation Run created.");
+  }
+
+  private static void logFinished(ValidationRunResponse response) {
+    addPersistedRunFields(LOGGER.atInfo().addKeyValue("event", "validation_run.finished"), response)
+        .log("Validation Run processing completed.");
+  }
+
+  private static void logProcessingFailed(ValidationRunResponse response) {
+    addPersistedRunFields(
+            LOGGER.atWarn().addKeyValue("event", "validation_run.processing_failed"), response)
+        .log("Validation Run processing produced a persisted failure.");
+  }
+
+  private static void logExecutionFailed(
+      UUID runId, UUID fileId, UUID profileId, Throwable failure) {
+    LOGGER
+        .atError()
+        .addKeyValue("event", "validation_run.execution_failed")
+        .addKeyValue("runId", runId)
+        .addKeyValue("sourceFileId", fileId)
+        .addKeyValue("profileId", profileId)
+        .setCause(failure)
+        .log("Validation Run execution failed unexpectedly.");
+  }
+
+  private static void logRecoveryFailed(
+      UUID runId, UUID fileId, UUID profileId, Throwable failure) {
+    LOGGER
+        .atError()
+        .addKeyValue("event", "validation_run.recovery_failed")
+        .addKeyValue("runId", runId)
+        .addKeyValue("sourceFileId", fileId)
+        .addKeyValue("profileId", profileId)
+        .setCause(failure)
+        .log("Validation Run failure recovery failed unexpectedly.");
+  }
+
+  private static org.slf4j.spi.LoggingEventBuilder addPersistedRunFields(
+      org.slf4j.spi.LoggingEventBuilder event, ValidationRunResponse response) {
+    return event
+        .addKeyValue("runId", response.id())
+        .addKeyValue("datasetId", response.datasetId())
+        .addKeyValue("sourceFileId", response.sourceFileId())
+        .addKeyValue("profileId", response.profileId())
+        .addKeyValue("status", response.status())
+        .addKeyValue("totalRows", response.totalRows())
+        .addKeyValue("validRows", response.validRows())
+        .addKeyValue("invalidRows", response.invalidRows())
+        .addKeyValue("issueCount", response.issueCount());
   }
 
   private static ValidationRunResponse toResponse(ValidationRun validationRun) {

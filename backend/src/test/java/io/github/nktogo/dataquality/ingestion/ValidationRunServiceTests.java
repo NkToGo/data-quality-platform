@@ -7,11 +7,19 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
+import org.slf4j.LoggerFactory;
 
 class ValidationRunServiceTests {
 
@@ -25,6 +33,24 @@ class ValidationRunServiceTests {
       mock(ValidationRunRepository.class);
   private final ValidationRunService service =
       new ValidationRunService(lifecycleService, recoveryService, validationRunRepository);
+  private final Logger serviceLogger = (Logger) LoggerFactory.getLogger(ValidationRunService.class);
+  private final ListAppender<ILoggingEvent> logAppender = new ListAppender<>();
+  private boolean originalAdditive;
+
+  @BeforeEach
+  void setUp() {
+    originalAdditive = serviceLogger.isAdditive();
+    serviceLogger.setAdditive(false);
+    logAppender.start();
+    serviceLogger.addAppender(logAppender);
+  }
+
+  @AfterEach
+  void tearDown() {
+    serviceLogger.detachAppender(logAppender);
+    serviceLogger.setAdditive(originalAdditive);
+    logAppender.stop();
+  }
 
   @Test
   void createsPendingRunThenProcessesIt() {
@@ -44,6 +70,24 @@ class ValidationRunServiceTests {
     calls.verify(lifecycleService).createPending(fileId, profileId);
     calls.verify(lifecycleService).process(runId);
     verifyNoInteractions(recoveryService);
+    assertEvent("validation_run.created", Level.INFO, runId, null);
+    assertEvent("validation_run.finished", Level.INFO, runId, null);
+  }
+
+  @Test
+  void recordsAHandledPersistedProcessingFailure() {
+    UUID fileId = UUID.randomUUID();
+    UUID profileId = UUID.randomUUID();
+    UUID runId = UUID.randomUUID();
+    ValidationRunResponse failed = response(runId, fileId, profileId, ValidationRunStatus.FAILED);
+    when(lifecycleService.createPending(fileId, profileId)).thenReturn(runId);
+    when(lifecycleService.process(runId)).thenReturn(failed);
+
+    ValidationRunResponse result =
+        service.create(fileId, new CreateValidationRunRequest(profileId));
+
+    assertThat(result).isSameAs(failed);
+    assertEvent("validation_run.processing_failed", Level.WARN, runId, null);
   }
 
   @Test
@@ -111,6 +155,8 @@ class ValidationRunServiceTests {
     calls.verify(lifecycleService).createPending(fileId, profileId);
     calls.verify(lifecycleService).process(runId);
     calls.verify(recoveryService).recover(failure);
+    assertEvent("validation_run.execution_failed", Level.ERROR, runId, cause);
+    assertEvent("validation_run.processing_failed", Level.WARN, runId, null);
   }
 
   @Test
@@ -126,6 +172,7 @@ class ValidationRunServiceTests {
         .isSameAs(failure);
 
     verifyNoInteractions(recoveryService);
+    assertEvent("validation_run.execution_failed", Level.ERROR, runId, failure);
   }
 
   @Test
@@ -144,6 +191,36 @@ class ValidationRunServiceTests {
     assertThatThrownBy(() -> service.create(fileId, new CreateValidationRunRequest(profileId)))
         .isSameAs(recoveryFailure);
     assertThat(recoveryFailure.getSuppressed()).containsExactly(processingFailure);
+    assertEvent(
+        "validation_run.execution_failed", Level.ERROR, runId, processingFailure.getCause());
+    assertEvent("validation_run.recovery_failed", Level.ERROR, runId, recoveryFailure);
+  }
+
+  private void assertEvent(String eventName, Level level, UUID runId, Throwable expectedThrowable) {
+    List<ILoggingEvent> matchingEvents =
+        logAppender.list.stream()
+            .filter(
+                event ->
+                    event.getKeyValuePairs().stream()
+                        .anyMatch(pair -> pair.key.equals("event") && pair.value.equals(eventName)))
+            .toList();
+
+    assertThat(matchingEvents).hasSize(1);
+    ILoggingEvent event = matchingEvents.getFirst();
+    assertThat(event.getLevel()).isEqualTo(level);
+    assertThat(event.getKeyValuePairs())
+        .anySatisfy(
+            pair -> {
+              assertThat(pair.key).isEqualTo("runId");
+              assertThat(pair.value).isEqualTo(runId);
+            });
+    if (expectedThrowable == null) {
+      assertThat(event.getThrowableProxy()).isNull();
+    } else {
+      assertThat(event.getThrowableProxy()).isNotNull();
+      assertThat(event.getThrowableProxy().getClassName())
+          .isEqualTo(expectedThrowable.getClass().getName());
+    }
   }
 
   private ValidationRunResponse response(
