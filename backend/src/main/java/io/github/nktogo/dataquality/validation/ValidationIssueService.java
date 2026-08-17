@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-class ValidationIssueService {
+class ValidationIssueService implements ValidationIssueReportAccess {
 
   private final ValidationIssueRepository validationIssueRepository;
   private final ValidationRunAccess validationRunAccess;
@@ -34,6 +34,12 @@ class ValidationIssueService {
 
   @Transactional(readOnly = true)
   List<ValidationIssueResponse> getAll(UUID runId) {
+    return getValidationIssuesForReport(runId);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<ValidationIssueResponse> getValidationIssuesForReport(UUID runId) {
     Objects.requireNonNull(runId, "runId must not be null");
     validationRunAccess.requireValidationRun(runId);
 

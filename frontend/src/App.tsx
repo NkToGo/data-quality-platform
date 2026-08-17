@@ -27,11 +27,13 @@ function App() {
 
       <header className="site-header">
         <div className="content-width">
-          <p className="milestone-label">Milestone 5</p>
+          <p className="milestone-label">Milestone 6</p>
           <h1>
             <Link to="/">Data Quality Platform</Link>
           </h1>
-          <p className="intro">Read-only Dataset and Validation Run dashboard.</p>
+          <p className="intro">
+            Read-only Dataset and Validation Run dashboard with report exports.
+          </p>
         </div>
       </header>
 

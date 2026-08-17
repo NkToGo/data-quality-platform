@@ -146,8 +146,13 @@ main {
 
 .run-metadata,
 .run-summary,
+.run-exports,
 .run-issues {
   min-width: 0;
+}
+
+.run-exports {
+  grid-column: 1 / -1;
 }
 
 .metadata-grid,
@@ -388,6 +393,31 @@ main {
   color: #778392;
   background: #e9ecef;
   cursor: not-allowed;
+}
+
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.report-download-status,
+.report-download-error {
+  margin-top: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.report-download-status {
+  padding: 0.875rem 1rem;
+  color: #225b36;
+  background: #edf7f0;
+  border: 1px solid #bfd9c7;
+  border-radius: 0.5rem;
+}
+
+.report-download-status p {
+  margin: 0;
 }
 
 .visually-hidden {

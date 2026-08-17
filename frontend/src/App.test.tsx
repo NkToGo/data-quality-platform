@@ -13,6 +13,7 @@ import { renderWithRouter } from './test/renderWithRouter';
 vi.mock('./api/client', () => ({
   getDatasets: vi.fn(),
   getValidationIssues: vi.fn(),
+  getValidationRunReport: vi.fn(),
   getValidationRun: vi.fn(),
   getValidationRuns: vi.fn(),
 }));
@@ -44,6 +45,7 @@ describe('App routing', () => {
     renderWithRouter(<App />, `/runs/${validationRunFixture.id}`);
 
     expect(await screen.findByRole('heading', { name: 'Run summary' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Export report' })).toBeInTheDocument();
     expect(screen.getByText(validationRunFixture.id)).toBeInTheDocument();
     expect(getValidationRunMock).toHaveBeenCalledWith(
       validationRunFixture.id,
