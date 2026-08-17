@@ -1,5 +1,8 @@
 package io.github.nktogo.dataquality.ingestion;
 
+import io.github.nktogo.dataquality.operations.OperationsMetrics;
+import io.github.nktogo.dataquality.operations.OperationsMetrics.ValidationProcessingOutcome;
+import io.github.nktogo.dataquality.operations.OperationsMetrics.ValidationProcessingSample;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -15,31 +18,42 @@ class ValidationRunService implements ValidationRunAccess, ValidationRunReportAc
   private final ValidationRunLifecycleService validationRunLifecycleService;
   private final ValidationRunRecoveryService validationRunRecoveryService;
   private final ValidationRunRepository validationRunRepository;
+  private final OperationsMetrics operationsMetrics;
 
   ValidationRunService(
       ValidationRunLifecycleService validationRunLifecycleService,
       ValidationRunRecoveryService validationRunRecoveryService,
-      ValidationRunRepository validationRunRepository) {
+      ValidationRunRepository validationRunRepository,
+      OperationsMetrics operationsMetrics) {
     this.validationRunLifecycleService = validationRunLifecycleService;
     this.validationRunRecoveryService = validationRunRecoveryService;
     this.validationRunRepository = validationRunRepository;
+    this.operationsMetrics = operationsMetrics;
   }
 
   ValidationRunResponse create(UUID fileId, CreateValidationRunRequest request) {
     UUID runId = validationRunLifecycleService.createPending(fileId, request.profileId());
+    operationsMetrics.incrementValidationRunsCreated();
     logCreated(runId, fileId, request.profileId());
+    ValidationProcessingSample processingSample = operationsMetrics.startValidationProcessing();
+
     try {
-      return recordProcessingResult(validationRunLifecycleService.process(runId));
+      return recordProcessingResult(validationRunLifecycleService.process(runId), processingSample);
     } catch (ValidationProcessingFailureException failure) {
       logExecutionFailed(runId, fileId, request.profileId(), failure.getCause());
       try {
-        return recordProcessingResult(validationRunRecoveryService.recover(failure));
+        return recordProcessingResult(
+            validationRunRecoveryService.recover(failure), processingSample);
       } catch (RuntimeException recoveryFailure) {
+        operationsMetrics.recordValidationProcessing(
+            processingSample, ValidationProcessingOutcome.ERROR);
         logRecoveryFailed(runId, fileId, request.profileId(), recoveryFailure);
         recoveryFailure.addSuppressed(failure);
         throw recoveryFailure;
       }
     } catch (RuntimeException executionFailure) {
+      operationsMetrics.recordValidationProcessing(
+          processingSample, ValidationProcessingOutcome.ERROR);
       logExecutionFailed(runId, fileId, request.profileId(), executionFailure);
       throw executionFailure;
     }
@@ -75,15 +89,22 @@ class ValidationRunService implements ValidationRunAccess, ValidationRunReportAc
         .orElseThrow(() -> new ValidationRunNotFoundException(runId));
   }
 
-  private ValidationRunResponse recordProcessingResult(ValidationRunResponse response) {
+  private ValidationRunResponse recordProcessingResult(
+      ValidationRunResponse response, ValidationProcessingSample processingSample) {
     switch (response.status()) {
       case COMPLETED -> {
+        operationsMetrics.recordValidationProcessing(
+            processingSample, ValidationProcessingOutcome.COMPLETED);
         logFinished(response);
       }
       case FAILED -> {
+        operationsMetrics.recordValidationProcessing(
+            processingSample, ValidationProcessingOutcome.FAILED);
         logProcessingFailed(response);
       }
       case PENDING, PROCESSING -> {
+        operationsMetrics.recordValidationProcessing(
+            processingSample, ValidationProcessingOutcome.ERROR);
         LOGGER
             .atError()
             .addKeyValue("event", "validation_run.execution_failed")

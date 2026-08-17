@@ -2,7 +2,10 @@ package io.github.nktogo.dataquality.reporting;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -14,6 +17,9 @@ import io.github.nktogo.dataquality.dataset.ValidationRuleSeverity;
 import io.github.nktogo.dataquality.dataset.ValidationRuleType;
 import io.github.nktogo.dataquality.ingestion.ValidationRunResponse;
 import io.github.nktogo.dataquality.ingestion.ValidationRunStatus;
+import io.github.nktogo.dataquality.operations.OperationsMetrics;
+import io.github.nktogo.dataquality.operations.OperationsMetrics.ReportGenerationOutcome;
+import io.github.nktogo.dataquality.operations.OperationsMetrics.ReportGenerationSample;
 import io.github.nktogo.dataquality.validation.ValidationIssueResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
@@ -34,8 +40,11 @@ class ValidationReportControllerTests {
       mock(ValidationReportService.class);
   private final ValidationReportCsvWriter validationReportCsvWriter =
       mock(ValidationReportCsvWriter.class);
+  private final OperationsMetrics operationsMetrics = mock(OperationsMetrics.class);
+  private final ReportGenerationSample generationSample = mock(ReportGenerationSample.class);
   private final ValidationReportController controller =
-      new ValidationReportController(validationReportService, validationReportCsvWriter);
+      new ValidationReportController(
+          validationReportService, validationReportCsvWriter, operationsMetrics);
   private final Logger controllerLogger =
       (Logger) LoggerFactory.getLogger(ValidationReportController.class);
   private final ListAppender<ILoggingEvent> logAppender = new ListAppender<>();
@@ -43,6 +52,7 @@ class ValidationReportControllerTests {
 
   @BeforeEach
   void setUp() {
+    when(operationsMetrics.startReportGeneration()).thenReturn(generationSample);
     originalAdditive = controllerLogger.isAdditive();
     controllerLogger.setAdditive(false);
     logAppender.start();
@@ -57,7 +67,7 @@ class ValidationReportControllerTests {
   }
 
   @Test
-  void generatesJsonWithADataSafeStructuredEvent() {
+  void generatesJsonWithSuccessMetricsAndADataSafeStructuredEvent() {
     ValidationReport report = report();
     UUID runId = report.validationRun().id();
     when(validationReportService.getReport(runId)).thenReturn(report);
@@ -70,6 +80,10 @@ class ValidationReportControllerTests {
     assertThat(response.getHeaders().getContentDisposition().getFilename())
         .isEqualTo("validation-run-" + runId + "-report.json");
     verifyNoInteractions(validationReportCsvWriter);
+    verify(operationsMetrics).incrementReportsGenerated(OperationsMetrics.ReportFormat.JSON);
+    verify(operationsMetrics)
+        .recordReportGeneration(
+            generationSample, OperationsMetrics.ReportFormat.JSON, ReportGenerationOutcome.SUCCESS);
 
     ILoggingEvent event = generatedEvent();
     assertThat(event.getLevel()).isEqualTo(Level.INFO);
@@ -90,7 +104,7 @@ class ValidationReportControllerTests {
   }
 
   @Test
-  void generatesCsvWithADataSafeStructuredEvent() {
+  void generatesCsvBeforeRecordingSuccess() {
     ValidationReport report = report();
     UUID runId = report.validationRun().id();
     byte[] csv = "header\r\nvalue\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -102,6 +116,10 @@ class ValidationReportControllerTests {
     assertThat(response.getBody()).isSameAs(csv);
     assertThat(response.getHeaders().getContentType())
         .isEqualTo(MediaType.parseMediaType("text/csv;charset=UTF-8"));
+    verify(operationsMetrics).incrementReportsGenerated(OperationsMetrics.ReportFormat.CSV);
+    verify(operationsMetrics)
+        .recordReportGeneration(
+            generationSample, OperationsMetrics.ReportFormat.CSV, ReportGenerationOutcome.SUCCESS);
     assertThat(generatedEvent().getKeyValuePairs())
         .anySatisfy(
             pair -> {
@@ -111,7 +129,7 @@ class ValidationReportControllerTests {
   }
 
   @Test
-  void doesNotClaimAReportWhenTheSnapshotCannotBeRead() {
+  void recordsAnErrorAndDoesNotClaimAReportWhenTheSnapshotCannotBeRead() {
     ValidationReport report = report();
     UUID runId = report.validationRun().id();
     IllegalStateException failure = new IllegalStateException("Database unavailable.");
@@ -120,11 +138,15 @@ class ValidationReportControllerTests {
     assertThatThrownBy(() -> controller.getReport(runId, requestWithFormat("json")))
         .isSameAs(failure);
 
+    verify(operationsMetrics)
+        .recordReportGeneration(
+            generationSample, OperationsMetrics.ReportFormat.JSON, ReportGenerationOutcome.ERROR);
+    verify(operationsMetrics, never()).incrementReportsGenerated(any());
     assertThat(logAppender.list).noneMatch(this::isGeneratedEvent);
   }
 
   @Test
-  void doesNotClaimAReportWhenCsvRenderingFails() {
+  void recordsAnErrorAndDoesNotClaimAReportWhenCsvRenderingFails() {
     ValidationReport report = report();
     UUID runId = report.validationRun().id();
     IllegalStateException failure = new IllegalStateException("CSV rendering failed.");
@@ -134,6 +156,10 @@ class ValidationReportControllerTests {
     assertThatThrownBy(() -> controller.getReport(runId, requestWithFormat("csv")))
         .isSameAs(failure);
 
+    verify(operationsMetrics)
+        .recordReportGeneration(
+            generationSample, OperationsMetrics.ReportFormat.CSV, ReportGenerationOutcome.ERROR);
+    verify(operationsMetrics, never()).incrementReportsGenerated(any());
     assertThat(logAppender.list).noneMatch(this::isGeneratedEvent);
   }
 

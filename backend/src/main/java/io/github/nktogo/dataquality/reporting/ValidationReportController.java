@@ -1,5 +1,8 @@
 package io.github.nktogo.dataquality.reporting;
 
+import io.github.nktogo.dataquality.operations.OperationsMetrics;
+import io.github.nktogo.dataquality.operations.OperationsMetrics.ReportGenerationOutcome;
+import io.github.nktogo.dataquality.operations.OperationsMetrics.ReportGenerationSample;
 import jakarta.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -23,30 +26,44 @@ class ValidationReportController {
 
   private final ValidationReportService validationReportService;
   private final ValidationReportCsvWriter validationReportCsvWriter;
+  private final OperationsMetrics operationsMetrics;
 
   ValidationReportController(
       ValidationReportService validationReportService,
-      ValidationReportCsvWriter validationReportCsvWriter) {
+      ValidationReportCsvWriter validationReportCsvWriter,
+      OperationsMetrics operationsMetrics) {
     this.validationReportService = validationReportService;
     this.validationReportCsvWriter = validationReportCsvWriter;
+    this.operationsMetrics = operationsMetrics;
   }
 
   @GetMapping("/api/validation-runs/{runId}/report")
   ResponseEntity<?> getReport(@PathVariable UUID runId, HttpServletRequest request) {
     String[] formatValues = request.getParameterValues("format");
     ReportFormat format = ReportFormat.parse(formatValues == null ? null : List.of(formatValues));
+    ReportGenerationSample generationSample = operationsMetrics.startReportGeneration();
 
-    ValidationReport report = validationReportService.getReport(runId);
-    ResponseEntity<?> response =
-        switch (format) {
-          case JSON -> downloadResponse(runId, format, MediaType.APPLICATION_JSON).body(report);
-          case CSV ->
-              downloadResponse(runId, format, CSV_MEDIA_TYPE)
-                  .body(validationReportCsvWriter.write(report));
-        };
+    try {
+      ValidationReport report = validationReportService.getReport(runId);
+      ResponseEntity<?> response =
+          switch (format) {
+            case JSON -> downloadResponse(runId, format, MediaType.APPLICATION_JSON).body(report);
+            case CSV ->
+                downloadResponse(runId, format, CSV_MEDIA_TYPE)
+                    .body(validationReportCsvWriter.write(report));
+          };
 
-    logGenerated(report, format);
-    return response;
+      OperationsMetrics.ReportFormat metricsFormat = toMetricsFormat(format);
+      operationsMetrics.incrementReportsGenerated(metricsFormat);
+      operationsMetrics.recordReportGeneration(
+          generationSample, metricsFormat, ReportGenerationOutcome.SUCCESS);
+      logGenerated(report, format);
+      return response;
+    } catch (RuntimeException failure) {
+      operationsMetrics.recordReportGeneration(
+          generationSample, toMetricsFormat(format), ReportGenerationOutcome.ERROR);
+      throw failure;
+    }
   }
 
   private ResponseEntity.BodyBuilder downloadResponse(
@@ -59,6 +76,13 @@ class ValidationReportController {
         .contentType(mediaType)
         .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
         .header(HttpHeaders.CACHE_CONTROL, "no-store");
+  }
+
+  private static OperationsMetrics.ReportFormat toMetricsFormat(ReportFormat format) {
+    return switch (format) {
+      case JSON -> OperationsMetrics.ReportFormat.JSON;
+      case CSV -> OperationsMetrics.ReportFormat.CSV;
+    };
   }
 
   private static void logGenerated(ValidationReport report, ReportFormat format) {

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -11,6 +12,9 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import io.github.nktogo.dataquality.operations.OperationsMetrics;
+import io.github.nktogo.dataquality.operations.OperationsMetrics.ValidationProcessingOutcome;
+import io.github.nktogo.dataquality.operations.OperationsMetrics.ValidationProcessingSample;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -31,14 +35,19 @@ class ValidationRunServiceTests {
       mock(ValidationRunRecoveryService.class);
   private final ValidationRunRepository validationRunRepository =
       mock(ValidationRunRepository.class);
+  private final OperationsMetrics operationsMetrics = mock(OperationsMetrics.class);
+  private final ValidationProcessingSample processingSample =
+      mock(ValidationProcessingSample.class);
   private final ValidationRunService service =
-      new ValidationRunService(lifecycleService, recoveryService, validationRunRepository);
+      new ValidationRunService(
+          lifecycleService, recoveryService, validationRunRepository, operationsMetrics);
   private final Logger serviceLogger = (Logger) LoggerFactory.getLogger(ValidationRunService.class);
   private final ListAppender<ILoggingEvent> logAppender = new ListAppender<>();
   private boolean originalAdditive;
 
   @BeforeEach
   void setUp() {
+    when(operationsMetrics.startValidationProcessing()).thenReturn(processingSample);
     originalAdditive = serviceLogger.isAdditive();
     serviceLogger.setAdditive(false);
     logAppender.start();
@@ -70,6 +79,9 @@ class ValidationRunServiceTests {
     calls.verify(lifecycleService).createPending(fileId, profileId);
     calls.verify(lifecycleService).process(runId);
     verifyNoInteractions(recoveryService);
+    verify(operationsMetrics).incrementValidationRunsCreated();
+    verify(operationsMetrics)
+        .recordValidationProcessing(processingSample, ValidationProcessingOutcome.COMPLETED);
     assertEvent("validation_run.created", Level.INFO, runId, null);
     assertEvent("validation_run.finished", Level.INFO, runId, null);
   }
@@ -87,6 +99,8 @@ class ValidationRunServiceTests {
         service.create(fileId, new CreateValidationRunRequest(profileId));
 
     assertThat(result).isSameAs(failed);
+    verify(operationsMetrics)
+        .recordValidationProcessing(processingSample, ValidationProcessingOutcome.FAILED);
     assertEvent("validation_run.processing_failed", Level.WARN, runId, null);
   }
 
@@ -155,6 +169,8 @@ class ValidationRunServiceTests {
     calls.verify(lifecycleService).createPending(fileId, profileId);
     calls.verify(lifecycleService).process(runId);
     calls.verify(recoveryService).recover(failure);
+    verify(operationsMetrics)
+        .recordValidationProcessing(processingSample, ValidationProcessingOutcome.FAILED);
     assertEvent("validation_run.execution_failed", Level.ERROR, runId, cause);
     assertEvent("validation_run.processing_failed", Level.WARN, runId, null);
   }
@@ -172,6 +188,8 @@ class ValidationRunServiceTests {
         .isSameAs(failure);
 
     verifyNoInteractions(recoveryService);
+    verify(operationsMetrics)
+        .recordValidationProcessing(processingSample, ValidationProcessingOutcome.ERROR);
     assertEvent("validation_run.execution_failed", Level.ERROR, runId, failure);
   }
 
@@ -191,6 +209,8 @@ class ValidationRunServiceTests {
     assertThatThrownBy(() -> service.create(fileId, new CreateValidationRunRequest(profileId)))
         .isSameAs(recoveryFailure);
     assertThat(recoveryFailure.getSuppressed()).containsExactly(processingFailure);
+    verify(operationsMetrics)
+        .recordValidationProcessing(processingSample, ValidationProcessingOutcome.ERROR);
     assertEvent(
         "validation_run.execution_failed", Level.ERROR, runId, processingFailure.getCause());
     assertEvent("validation_run.recovery_failed", Level.ERROR, runId, recoveryFailure);
