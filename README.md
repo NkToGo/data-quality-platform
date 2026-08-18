@@ -1,54 +1,65 @@
 # Data Quality Platform
 
-The Data Quality Platform is a learning and software-engineering project for building a full-stack data validation application in small, verifiable milestones.
+The Data Quality Platform is a local full-stack application for configuring reusable validation rules, validating uploaded CSV data, and reviewing persisted results. It combines a Spring Boot modular monolith with a read-only React dashboard, on-demand JSON and CSV reports, and operational diagnostics.
 
-## Current status
+The planned local MVP and all six milestones are complete. The project is intentionally scoped as learning and reference software for local use; it is not production-ready.
 
-Milestones 1 through 5 are complete. Milestone 6 reporting and operations are implemented on the current branch and remain in progress pending final automated verification, CI, manual end-to-end review, and merge:
+## Highlights
 
-- a Java 21 and Spring Boot backend
-- a React and TypeScript frontend
-- a read-only Dashboard for persisted Datasets, Validation Runs, summaries, and Issues
-- a local PostgreSQL service through Docker Compose
-- environment-backed backend datasource configuration
-- Spring Data JPA, Bean Validation, and Flyway infrastructure
-- a Flyway-managed `dataset` table
-- a Flyway-managed `validation_profile` table related to its parent Dataset
-- a Flyway-managed `validation_rule` table related to its parent Validation Profile, with rule parameters stored as PostgreSQL `jsonb` and constrained to rule-specific shapes
-- a Flyway-managed `source_file` table that stores upload metadata and private file contents
-- a Flyway-managed V5 `validation_run` table related to its Dataset, SourceFile, and Validation Profile, with V6 lifecycle constraints
-- a Flyway-managed `validation_issue` table related to its parent Validation Run
-- Dataset create, list, and detail REST endpoints
-- Validation Profile create and list REST endpoints nested under a Dataset
-- Validation Rule create and list REST endpoints nested under a Validation Profile, with semantic parameter validation on creation
-- a deterministic in-memory validation engine integrated into synchronous Validation Run processing
-- a Dataset-nested multipart CSV upload endpoint with a SHA-256 checksum
-- a SourceFile-nested endpoint that creates, parses, validates, and completes a Validation Run
-- global Validation Run list and detail REST endpoints
-- a read-only endpoint that lists a Validation Run's persisted Issues
-- read-only JSON and CSV Validation Report export endpoints
-- managed JSON and CSV report downloads from the Validation Run detail page
-- Logstash-compatible structured JSON application logs
-- Actuator health and runtime metrics endpoints with bounded domain metrics
-- deterministic UTF-8 CSV parsing with persisted parser and validation outcomes
-- PostgreSQL Testcontainers repository and API integration tests
-- backend and frontend tests and formatting checks
-- a GitHub Actions workflow for repository checks
+- Configurable Datasets, Validation Profiles, and five deterministic Validation Rule types.
+- Exact-byte CSV storage with SHA-256 checksums and strict UTF-8 parsing.
+- Persisted Validation Run lifecycle, summary counters, failure states, and ordered Issues.
+- Accessible Dashboard and addressable Run detail views with client-side Issue filtering.
+- Faithful JSON and CSV report exports that preserve stored values and Issue order.
+- Structured JSON logs, health checks, built-in runtime metrics, and bounded domain metrics.
+- PostgreSQL Testcontainers integration tests and backend, frontend, and Compose checks in GitHub Actions.
 
-The backend connects to PostgreSQL at startup. Flyway is the sole schema owner and applies migrations V1 through V9 for Dataset, Validation Profile, Validation Rule, rule-specific parameter constraints, SourceFile, Validation Run, Validation Run lifecycle and completed-summary constraints, and Validation Issue persistence. Hibernate validates the JPA mappings with `spring.jpa.hibernate.ddl-auto=validate` and does not generate schema changes. The backend exposes Actuator health and metrics plus the Dataset, Validation Profile, Validation Rule, SourceFile upload, Validation Run, Validation Issue retrieval, and Validation Report endpoints documented below. The frontend provides the read-only Dashboard, Run detail, Issue filtering, and report-download experience documented below.
+## Problem
 
-Dataset metadata can be created, listed, and retrieved. Validation Profiles can be created and listed for an existing Dataset. Validation Rules can be created and listed for an existing Validation Profile, and every Rule's parameters are validated against its type-specific contract before persistence. CSV files can be uploaded for an existing Dataset, and the backend stores their metadata, exact bytes, and SHA-256 checksums. Creating a Validation Run for a SourceFile and a Validation Profile from the same Dataset reads the private stored bytes, parses them, loads the Profile's enabled Rules, and validates the parsed rows synchronously. Successful validation atomically persists generated Issues and the `totalRows`, `validRows`, `invalidRows`, and `issueCount` summary before completing the Run. Expected parser failures, missing required headers, and recovered validation-processing failures persist safe `FAILED` outcomes without partial Issues. Unexpected SourceFile-access or parser runtime failures retain the separately committed `PENDING` Run for diagnosis. Validation Runs can be listed globally and retrieved by ID, their persisted Issues can be retrieved, and a faithful persisted snapshot can be exported as JSON or CSV. The frontend filters retrieved Issues client-side; filters do not alter reports. Dataset, profile, rule, SourceFile, and Validation Run updates or deletion, profile, rule, and SourceFile detail retrieval, pagination, authentication, and AI features are not implemented.
+CSV quality checks are often scattered across scripts and manual review. This project gives validation configuration, input provenance, deterministic execution, persisted findings, and report export one explicit workflow whose outcomes can be inspected and reproduced.
 
-## Repository layout
+## What This Project Covers
 
-```text
-backend/                 Spring Boot application, persistence, REST APIs, ingestion foundation, and Maven Wrapper
-frontend/                React, TypeScript, and Vite application
-.github/workflows/       Continuous integration checks
-compose.yaml             Local PostgreSQL service
-.env.example             Example local database and datasource configuration
-PROJECT_BRIEF.md         Product scope and milestone definition
-```
+1. Create a Dataset, a Validation Profile, and reusable Validation Rules through the REST API.
+2. Upload a CSV file while preserving its exact bytes, metadata, and SHA-256 checksum.
+3. Create a synchronous Validation Run that parses the stored file and evaluates enabled Rules.
+4. Persist the Run lifecycle, summary counters, ordered Issues, and safe failure outcomes.
+5. Review Datasets, Runs, summaries, and Issues in a read-only browser interface.
+6. Export the complete persisted Run snapshot as JSON or CSV and inspect local logs and metrics.
+
+The scope is deliberately bounded. The MVP does not include authentication, update or delete operations, pagination, background processing, production deployment, or automated data repair.
+
+## Features
+
+### Backend and Data
+
+- REST endpoints for Dataset, Validation Profile, Validation Rule, SourceFile upload, Validation Run, Issue retrieval, and report export workflows.
+- PostgreSQL persistence managed exclusively through Flyway migrations V1 through V9; Hibernate validates mappings but does not generate schema changes.
+- Rule-specific `jsonb` parameter constraints and application-level semantic validation.
+- Synchronous CSV parsing and deterministic validation with atomic persistence of successful summaries and Issues.
+- Explicit `PENDING`, `PROCESSING`, `COMPLETED`, and `FAILED` Run states, including safe parser failures and recovered validation-processing failures.
+
+### Frontend
+
+- `/` Dashboard for persisted Datasets and the global Validation Run collection.
+- Addressable `/runs/:runId` detail route with metadata, persisted summaries, Issues, and report downloads.
+- Exact client-side severity and field-name filters with AND semantics and preserved backend order.
+- Accessible loading, error, Retry, empty, and empty-filter-result states, plus keyboard-usable tables and controls.
+- Dataset-name resolution with UUID fallback; SourceFile and Validation Profile references remain UUID-only.
+
+### Reporting and Operations
+
+- Read-only JSON and CSV reports generated from one repeatable-read persisted snapshot.
+- Managed browser downloads that remain independent from active Issue filters.
+- Logstash-compatible structured application logs with a small, stable event vocabulary.
+- Actuator health and metrics endpoints with low-cardinality validation and report meters.
+
+### Quality and Verification
+
+- Unit, repository, API integration, accessibility-oriented frontend, and report-contract tests.
+- Real PostgreSQL integration tests through Testcontainers.
+- Spotless, ESLint, Prettier, TypeScript, Vite build, and Docker Compose validation checks.
+- GitHub Actions jobs for backend verification, frontend checks, and Compose validation.
 
 ## Architecture
 
@@ -62,7 +73,43 @@ The project is a modular monolith. The React and TypeScript browser application 
 
 PostgreSQL is the system of record. Flyway alone manages its schema, while Hibernate validates mappings at startup. Docker Compose intentionally provides PostgreSQL only; the backend and Vite development server run as local processes. No message broker, background worker, or monitoring stack is part of the MVP.
 
-## Prerequisites
+## Why This Project Matters
+
+The implementation emphasizes clear module ownership, deterministic ordering, consistent transactional outcomes, accessible asynchronous UI states, and verification across backend, frontend, database, and CI layers. Those choices make both successful and failed validation outcomes explainable without expanding the project beyond its local MVP scope.
+
+## Tech Stack
+
+| Area | Technologies |
+| --- | --- |
+| Backend | Java 21, Spring Boot 4.1, Spring MVC, Spring Data JPA, Hibernate, Bean Validation |
+| Persistence | PostgreSQL 18, Flyway, PostgreSQL `jsonb` constraints |
+| CSV and reporting | Apache Commons CSV, SHA-256 checksums, JSON and RFC 4180 CSV exports |
+| Frontend | React 19, TypeScript 6, React Router 7, Vite 8 |
+| Operations | Spring Boot Actuator, Micrometer, Logstash-compatible structured logging |
+| Testing | JUnit, Mockito, MockMvc, Testcontainers, Vitest, Testing Library |
+| Tooling | Maven Wrapper, npm, Docker Compose, Spotless, ESLint, Prettier, GitHub Actions |
+
+## Demo Screenshots
+
+![Data Quality Platform dashboard](assets/dashboard.png)
+
+![Validation Run detail view with report exports and validation issues](assets/validation-run-detail.png)
+
+## Repository Layout
+
+```text
+backend/                 Spring Boot application, persistence, REST APIs, validation, reporting, operations, and Maven Wrapper
+frontend/                React, TypeScript, and Vite application
+assets/                  README screenshots
+.github/workflows/       Continuous integration checks
+compose.yaml             Local PostgreSQL service
+.env.example             Example local database and datasource configuration
+PROJECT_BRIEF.md         Product scope and milestone definition
+```
+
+## Setup
+
+### Prerequisites
 
 - Java Development Kit 21
 - Node.js 24 LTS and npm 11
@@ -70,7 +117,7 @@ PostgreSQL is the system of record. Flyway alone manages its schema, while Hiber
 
 Maven does not need to be installed globally because the backend includes the Maven Wrapper.
 
-## Environment setup
+### Configure the Environment
 
 Create an untracked local environment file and replace the example password before starting PostgreSQL.
 
@@ -100,7 +147,7 @@ The PostgreSQL port is bound to `127.0.0.1` and is not exposed on external netwo
 
 Docker Compose reads `.env` automatically. Spring Boot does not, so load the same variables into the backend process environment before starting it. Spring Boot's standard `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, and `SPRING_DATASOURCE_PASSWORD` variables can override the composed local settings when needed. The multipart request limit includes headers and must remain greater than the SourceFile size limit.
 
-## Run locally
+### Start PostgreSQL
 
 Start PostgreSQL from the repository root:
 
@@ -109,11 +156,7 @@ docker compose up -d postgres
 docker compose ps
 ```
 
-Stop PostgreSQL without deleting its persistent volume:
-
-```sh
-docker compose down
-```
+### Start the Backend
 
 Run the backend on Unix-like systems after loading the root `.env`:
 
@@ -140,23 +183,7 @@ Get-Content ..\.env |
 
 The backend listens on `http://localhost:8080`. Its health endpoint is `http://localhost:8080/actuator/health`, and runtime meter discovery is available at `http://localhost:8080/actuator/metrics`. A missing or incorrect database password causes startup to fail when Flyway connects.
 
-## Read-only frontend Dashboard
-
-The `/` Dashboard route presents the persisted Dataset collection and the global Validation Run collection. Each Dataset row shows its name, optional description, UUID, and creation timestamp. Each Validation Run row links to its addressable `/runs/:runId` detail route and shows its textual status, Dataset context, and persisted `totalRows`, `validRows`, `invalidRows`, and `issueCount` summary counters. Collections stay in the order supplied by the backend; the frontend does not sort them.
-
-Dataset names are resolved from the Dataset collection when possible. The Dataset UUID remains visible and is the fallback when a matching name is unavailable or the Dataset request fails. SourceFile and Validation Profile references remain UUID-only because the frontend has no SourceFile or Profile detail endpoint to query.
-
-The Validation Run detail route presents persisted metadata, lifecycle timestamps, any failure reason, the four persisted summary counters, and the Run's persisted Validation Issues. Issue rows show the logical row number, exact field name, Rule type, severity text, message, and observed value. Markup-like observed values render literally as text. Non-empty whitespace is preserved, while null and empty strings have distinct labels. Entering or refreshing a `/runs/:runId` URL works with the Vite development server.
-
-The same detail route provides managed “Download JSON report” and “Download CSV report” actions. A download has its own loading, success, error, and format-specific Retry state without hiding the Run or Issues. Only one report request is active at a time, and leaving the route aborts it. Reports always contain the complete persisted snapshot; active Issue filters do not alter export requests. `PENDING` and `PROCESSING` reports are allowed but are explicitly described as potentially incomplete current snapshots.
-
-Issue filtering happens entirely in the browser after the collection is retrieved. Severity filtering matches `ERROR` or `WARNING`. Field-name filtering uses exact, case-sensitive, and whitespace-sensitive equality. When both filters are active, an Issue must match both conditions. Filtering preserves the backend collection order and sends no filter parameters to the API.
-
-The Dashboard has independent loading, error, Retry, and empty states for Datasets and Validation Runs. Validation Run loading and Issue loading have their own error and Retry states. An existing Run without persisted Issues has a dedicated empty state. Active filters with no matches show a distinct empty-filter-result state and a Clear filters control. Retry controls repeat the relevant read-only GET request; they do not retry backend processing.
-
-The frontend remains read-only: report downloads use GET requests and do not change backend state. It has no UI for creating, uploading, updating, deleting, starting, retrying processing, or cancelling resources. The existing REST API and commands below can create representative local data. The current MVP collections and reports are unpaged and provide no pagination, server-side filtering, or server-side sorting.
-
-### Run the frontend locally
+### Start the Frontend
 
 With PostgreSQL and the backend running, start Vite in another terminal.
 
@@ -178,7 +205,35 @@ npm.cmd run dev
 
 Open the URL printed by Vite, normally `http://localhost:5173/`. During development, Vite proxies relative `/api` requests to `http://localhost:8080`; this workflow does not require backend CORS configuration.
 
-## Dataset API
+### Stop Local Services
+
+Stop the backend and Vite processes with `Ctrl+C`. Stop PostgreSQL without deleting its persistent volume from the repository root:
+
+```sh
+docker compose down
+```
+
+## Frontend Behavior
+
+The `/` Dashboard route presents the persisted Dataset collection and the global Validation Run collection. Each Dataset row shows its name, optional description, UUID, and creation timestamp. Each Validation Run row links to its addressable `/runs/:runId` detail route and shows its textual status, Dataset context, and persisted `totalRows`, `validRows`, `invalidRows`, and `issueCount` summary counters. Collections stay in the order supplied by the backend; the frontend does not sort them.
+
+Dataset names are resolved from the Dataset collection when possible. The Dataset UUID remains visible and is the fallback when a matching name is unavailable or the Dataset request fails. SourceFile and Validation Profile references remain UUID-only because the frontend has no SourceFile or Profile detail endpoint to query.
+
+The Validation Run detail route presents persisted metadata, lifecycle timestamps, any failure reason, the four persisted summary counters, and the Run's persisted Validation Issues. Issue rows show the logical row number, exact field name, Rule type, severity text, message, and observed value. Markup-like observed values render literally as text. Non-empty whitespace is preserved, while null and empty strings have distinct labels. Entering or refreshing a `/runs/:runId` URL works with the Vite development server.
+
+The same detail route provides managed “Download JSON report” and “Download CSV report” actions. A download has its own loading, success, error, and format-specific Retry state without hiding the Run or Issues. Only one report request is active at a time, and leaving the route aborts it. Reports always contain the complete persisted snapshot; active Issue filters do not alter export requests. `PENDING` and `PROCESSING` reports are allowed but are explicitly described as potentially incomplete current snapshots.
+
+Issue filtering happens entirely in the browser after the collection is retrieved. Severity filtering matches `ERROR` or `WARNING`. Field-name filtering uses exact, case-sensitive, and whitespace-sensitive equality. When both filters are active, an Issue must match both conditions. Filtering preserves the backend collection order and sends no filter parameters to the API.
+
+The Dashboard has independent loading, error, Retry, and empty states for Datasets and Validation Runs. Validation Run loading and Issue loading have their own error and Retry states. An existing Run without persisted Issues has a dedicated empty state. Active filters with no matches show a distinct empty-filter-result state and a Clear filters control. Retry controls repeat the relevant read-only GET request; they do not retry backend processing.
+
+The frontend remains read-only: report downloads use GET requests and do not change backend state. It has no UI for creating, uploading, updating, deleting, starting, retrying processing, or cancelling resources. The existing REST API and commands below can create representative local data. The current MVP collections and reports are unpaged and provide no pagination, server-side filtering, or server-side sorting.
+
+## Technical Reference
+
+The following sections document the implemented API contracts, validation semantics, persistence behavior, reporting formats, and operational interfaces in detail.
+
+### Dataset API
 
 The current API manages Dataset metadata only. A Dataset contains a generated UUID, a required name, an optional description, and a creation timestamp.
 
@@ -254,7 +309,7 @@ Invoke-RestMethod http://localhost:8080/api/datasets
 Invoke-RestMethod "http://localhost:8080/api/datasets/$($created.id)"
 ```
 
-## SourceFile upload API
+### SourceFile Upload API
 
 A SourceFile belongs to one Dataset. The backend stores the exact uploaded bytes privately in PostgreSQL together with a generated UUID, the parent Dataset UUID, the stored filename basename, the submitted content type, the byte count, a SHA-256 checksum, and an upload timestamp.
 
@@ -317,7 +372,7 @@ $expectedHash
 
 No SourceFile list, detail, download, or deletion endpoint is implemented. Uploading a SourceFile does not parse it or automatically create a Validation Run.
 
-## CSV parsing
+### CSV Parsing
 
 The backend uses its tested in-memory CSV parser synchronously when a Validation Run is created. It reads the exact stored SourceFile bytes through private backend access. File contents are never exposed through the API. Upload admission remains separate and does not parse the file or automatically create a Validation Run.
 
@@ -337,7 +392,7 @@ The parser contract is:
 
 The parser returns immutable ordered headers and rows. Embedded newlines inside a quoted field do not increment the logical record number. A successful parse records the number of logical data records, excluding the header, and supplies the immutable parsed data to synchronous Validation Rule execution. An expected parser failure is persisted as `FAILED` with the stable parser message and a finished timestamp. An unexpected SourceFile-access or parser runtime failure rolls back the processing transaction and leaves the separately committed Run in `PENDING`.
 
-## Validation Profile API
+### Validation Profile API
 
 A Validation Profile belongs to one Dataset and contains a generated UUID, the parent Dataset UUID, a required name, and a creation timestamp.
 
@@ -415,7 +470,7 @@ $profile
 Invoke-RestMethod "http://localhost:8080/api/datasets/$($created.id)/profiles"
 ```
 
-## Validation Rule API
+### Validation Rule API
 
 A Validation Rule belongs to one Validation Profile. It contains a generated UUID, the parent Profile UUID, a field name, a rule type, a parameters object, a severity, and an enabled flag.
 
@@ -461,7 +516,7 @@ Numeric bounds are normalized by their structural numeric value rather than pres
 
 Arbitrary Java date patterns are not accepted. Duplicate or overlapping Rules remain allowed.
 
-### Deterministic validation engine
+#### Deterministic Validation Engine
 
 The backend uses an in-memory engine for all five supported Rule types during synchronous Validation Run processing. A narrow read boundary supplies only enabled Rules in PostgreSQL UUID `id ASC` order, and the engine evaluates those immutable definitions against immutable ordered headers and logical CSV rows. Field-to-header matching is exact and case-sensitive, with whitespace preserved. A missing configured header produces a persisted `FAILED` Run with the safe reason `CSV header does not contain a field required by the Validation Profile.`, the parsed `totalRows`, zero validation counters, and no Issues.
 
@@ -539,7 +594,7 @@ $rule
 Invoke-RestMethod "http://localhost:8080/api/profiles/$($profile.id)/rules"
 ```
 
-## Validation Run API
+### Validation Run API
 
 A Validation Run belongs to one Dataset, one SourceFile, and one Validation Profile. The SourceFile and Validation Profile must belong to the same Dataset. The Dataset UUID is derived from the SourceFile and is not accepted from the client.
 
@@ -725,7 +780,7 @@ Invoke-WebRequest `
 
 No Validation Run update, deletion, retry, or separate summary endpoint is implemented. Run creation performs the synchronous parse-and-validate workflow and returns the completed summary through the existing Run representation.
 
-## Validation Issue API
+### Validation Issue API
 
 A Validation Issue belongs to one Validation Run. Issues contain a generated UUID, the parent Run UUID, a logical CSV row number, a field name, a Rule type, a severity, a message, and an optional observed value. Successful Validation Run processing persists generated Issues internally, but the backend does not expose a public Issue creation endpoint.
 
@@ -760,7 +815,7 @@ A valid but unknown Run UUID returns the existing `Validation Run not found` `40
 
 Issue retrieval is read-only. It does not parse CSV, invoke validation, create or delete Issues, calculate summaries, compare the result with `issueCount`, or change the Run lifecycle. The endpoint itself provides no filtering, pagination, user-selectable sorting, or public Issue write operation. The frontend filters the retrieved collection client-side by severity and exact field name; it does not send filter parameters to the backend or reporting endpoint.
 
-## Validation Report API
+### Validation Report API
 
 A Validation Report is generated on demand from one persisted Validation Run and its complete ordered Issue collection. Reports are not stored. Generation uses a repeatable-read, read-only transaction and never reads SourceFile bytes, parses CSV, invokes Rules, recalculates counters, compares `issueCount`, retries processing, or changes database state.
 
@@ -782,7 +837,7 @@ Exactly one lowercase `format` query value is required. Missing, blank, repeated
 
 An existing `PENDING`, `PROCESSING`, `COMPLETED`, or `FAILED` Run can be exported. A nonterminal report is only the persisted snapshot visible when its transaction begins and may be incomplete. Successful responses use `Cache-Control: no-store` and an attachment filename of `validation-run-{runId}-report.json` or `validation-run-{runId}-report.csv`. A valid unknown Run uses the existing `Validation Run not found` response with the report path as its `instance`; a malformed Run UUID returns `400 Bad Request`.
 
-### JSON report
+#### JSON Report
 
 JSON reports use `application/json` and contain two top-level fields. `validationRun` is the existing exact 12-field Run representation, and `issues` contains the existing exact eight-field Issue representations in persisted retrieval order:
 
@@ -819,7 +874,7 @@ JSON reports use `application/json` and contain two top-level fields. `validatio
 
 The report contains no generated timestamp or resolved Dataset/Profile/SourceFile names. It represents only stored Run and Issue fields, so repeated exports of unchanged data are semantically deterministic.
 
-### CSV report
+#### CSV Report
 
 CSV reports use `text/csv;charset=UTF-8`, UTF-8 without a byte-order mark, RFC 4180 quoting, and CRLF record separators. The header is fixed:
 
@@ -831,7 +886,7 @@ Each persisted Issue produces one row with the Run fields repeated. A Run withou
 
 CSV fields are data, not trusted spreadsheet instructions. Values beginning with `=`, `+`, `-`, or `@` are deliberately not rewritten, so review untrusted exports before opening them in software that evaluates formulas.
 
-## Persistence relationships
+## Persistence Relationships
 
 Validation Profiles and SourceFiles require an existing Dataset, Validation Rules require an existing Validation Profile, Validation Runs require an existing Dataset, SourceFile, and Validation Profile, and Validation Issues require an existing Validation Run. Validation Run creation also requires the SourceFile and Validation Profile to belong to the same Dataset. All foreign keys use `ON DELETE RESTRICT`, and no cascading deletion is configured. If rows are removed directly during local cleanup, delete Validation Issues first, then Validation Runs, then Validation Rules and SourceFiles, then Validation Profiles, and finally Datasets.
 
@@ -874,7 +929,9 @@ curl --fail-with-body http://localhost:8080/actuator/metrics/dataquality.report.
 
 Micrometer's in-memory registry is diagnostic and resets whenever the backend restarts. Prometheus, Grafana, and external metric or log shipping are not part of the MVP. The application has no authentication, so do not expose the backend or its Actuator port to an untrusted network. Sensitive Actuator endpoints such as `env`, `configprops`, `loggers`, `heapdump`, and `threaddump` remain unexposed.
 
-## Backend commands
+## Testing and CI
+
+### Backend Commands
 
 Run these commands from `backend/`. Replace `./mvnw` with `.\mvnw.cmd` on Windows.
 
@@ -894,7 +951,7 @@ Run these commands from `backend/`. Replace `./mvnw` with `.\mvnw.cmd` on Window
 
 Docker must be running for `test`, `package`, and `verify`. The integration test uses its own disposable database and does not use the local Compose database or `.env`.
 
-## Frontend commands
+### Frontend Commands
 
 Run these commands from `frontend/`. On Windows PowerShell, use `npm.cmd` if the PowerShell execution policy blocks `npm.ps1`.
 
@@ -917,7 +974,7 @@ npm run check
 - `build` type-checks the application and creates a production build.
 - `check` runs linting, formatting verification, tests, and the production build.
 
-## Compose validation
+### Compose Validation
 
 Validate the committed configuration without creating a local `.env` file:
 
@@ -925,7 +982,7 @@ Validate the committed configuration without creating a local `.env` file:
 docker compose --env-file .env.example config --quiet
 ```
 
-## Continuous integration
+### Continuous Integration
 
 The GitHub Actions workflow runs three independent jobs on pushes and pull requests:
 
@@ -933,7 +990,7 @@ The GitHub Actions workflow runs three independent jobs on pushes and pull reque
 - frontend install, lint, formatting, test, and build checks on Node.js 24
 - Docker Compose configuration validation
 
-## Known limitations
+## Known Limitations
 
 - Validation Run creation, CSV parsing, Rule execution, Issue persistence, and report generation are synchronous and in-memory.
 - Collections and reports are unpaged. The managed frontend download buffers the complete report in browser memory before starting the save operation.
@@ -947,9 +1004,9 @@ The GitHub Actions workflow runs three independent jobs on pushes and pull reque
 - OpenAPI was listed as an initial technology choice but is not implemented in the MVP. This README is the canonical implemented API contract.
 - No AI feature is implemented; any later AI assistance must remain advisory and must not modify data automatically.
 
-## Final MVP review
+## MVP Verification
 
-Do not treat Milestone 6 or the MVP as complete until this review succeeds against the real local stack:
+The following checklist provides a repeatable end-to-end verification path for the completed local MVP:
 
 1. Start PostgreSQL through Compose, load `.env`, start the backend, and start Vite with the commands above.
 2. Use the documented REST examples to create a Dataset, Validation Profile, all five Rule types, a SourceFile, and a Validation Run.
@@ -959,16 +1016,18 @@ Do not treat Milestone 6 or the MVP as complete until this review succeeds again
 6. Confirm active frontend filters do not alter report requests or report content. Exercise keyboard operation, announcements, narrow widths, report failure, and Retry by stopping and restarting the backend.
 7. Parse representative application log lines as JSON, confirm the expected event fields, and check that CSV contents and observed values are absent.
 8. Query health, built-in runtime meters, and the four application meters before and after Run/report operations. Confirm unexposed Actuator endpoints remain unavailable.
-9. Run the complete backend, frontend, audit, and Compose verification commands and require green GitHub Actions.
-10. Review all 14 acceptance criteria in `PROJECT_BRIEF.md`, review the limitations above, and complete project review before merging.
+9. Run the complete backend, frontend, audit, and Compose verification commands and confirm that GitHub Actions remains green.
+10. Review all 14 acceptance criteria in `PROJECT_BRIEF.md` and confirm that the implementation still matches the documented scope and limitations.
 
-## Milestone status
+## Project Status
 
-- Milestone 1: complete, with repository foundations, Spring Boot and React applications, PostgreSQL Compose, CI, and health support
-- Milestone 2: complete, with PostgreSQL persistence and Dataset, Validation Profile, and Validation Rule REST vertical slices
-- Milestone 3: complete, with SourceFile upload, exact byte storage and SHA-256 checksums, synchronous CSV parsing, persisted `PROCESSING` and parser-failure lifecycle states, and Validation Run retrieval
-- Milestone 4: complete, with deterministic rule-specific parameter validation, synchronous Rule execution, Validation Issue persistence and retrieval, validation-derived Run summaries, and successful transition to `COMPLETED`
-- Milestone 5: complete, with the read-only Dashboard, addressable Run detail, persisted summaries and Issues, client-side filters, and user-visible async and empty states
-- Milestone 6: implemented on the current branch with JSON/CSV report export, managed downloads, structured logs, runtime metrics, and final documentation; completion still requires final automated verification, CI, manual end-to-end review, and merge
+The planned local MVP is complete. All six milestones have been implemented, reviewed, merged, and verified. This status means the requirements in `PROJECT_BRIEF.md` are complete; it does not mean the application is production-ready, and the limitations above still apply.
+
+- Milestone 1: complete, with repository foundations, Spring Boot and React applications, PostgreSQL Compose, CI, and health support.
+- Milestone 2: complete, with PostgreSQL persistence and Dataset, Validation Profile, and Validation Rule REST vertical slices.
+- Milestone 3: complete, with SourceFile upload, exact byte storage and SHA-256 checksums, synchronous CSV parsing, persisted `PROCESSING` and parser-failure lifecycle states, and Validation Run retrieval.
+- Milestone 4: complete, with deterministic rule-specific parameter validation, synchronous Rule execution, Validation Issue persistence and retrieval, validation-derived Run summaries, and successful transition to `COMPLETED`.
+- Milestone 5: complete, with the read-only Dashboard, addressable Run detail, persisted summaries and Issues, client-side filters, and user-visible asynchronous and empty states.
+- Milestone 6: complete, with JSON and CSV report export, managed downloads, structured logs, runtime metrics, final documentation, and MVP review.
 
 The detailed product scope and milestone definitions are maintained in `PROJECT_BRIEF.md`.
